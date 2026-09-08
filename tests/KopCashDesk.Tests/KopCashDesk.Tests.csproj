@@ -1,10 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWPF>true</UseWPF>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <ProjectReference Include="..\..\src\KopCashDesk.Core\KopCashDesk.Core.csproj" />
     <ProjectReference Include="..\..\src\KopCashDesk.Data\KopCashDesk.Data.csproj" />
+    <ProjectReference Include="..\..\src\KopCashDesk.Desktop\KopCashDesk.Desktop.csproj" />
   </ItemGroup>
 </Project>
