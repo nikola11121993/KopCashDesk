@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KopCashDesk.Core/KopCashDesk.Core.csproj" />
+    <Project Path="src/KopCashDesk.Data/KopCashDesk.Data.csproj" />
+    <Project Path="src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KopCashDesk.Tests/KopCashDesk.Tests.csproj" />
+  </Folder>
+</Solution>
