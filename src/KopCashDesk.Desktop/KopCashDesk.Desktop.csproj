@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>KopCashDesk</AssemblyName>
+    <RootNamespace>KopCashDesk.Desktop</RootNamespace>
+    <ApplicationTitle>КОП Кассы</ApplicationTitle>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\KopCashDesk.Core\KopCashDesk.Core.csproj" />
+    <ProjectReference Include="..\KopCashDesk.Data\KopCashDesk.Data.csproj" />
+  </ItemGroup>
+</Project>
