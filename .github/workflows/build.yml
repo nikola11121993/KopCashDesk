@@ -49,5 +49,38 @@ jobs:
         shell: pwsh
         run: |
           if ('${{ steps.portable.outcome }}' -ne 'success') {
-            "### Delivery not available`nCompilation and tests have separate results. The ZIP could not be uploaded; check the artifact storage quota. No downloadable binary is claimed." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "### Actions artifact upload unavailable`nCompilation and tests have separate results. The ZIP could not be uploaded to Actions storage. A separate private preview release is attempted only after a successful build." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
+  preview:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish verified source
+        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true --output artifacts/KopCashDesk
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path artifacts/KopCashDesk/* -DestinationPath artifacts/KopCashDesk-win-x64.zip
+      - name: Publish private preview release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'v0.1.0-preview'
+          $asset = 'artifacts/KopCashDesk-win-x64.zip'
+          $notes = 'Начальная техническая версия. Работают справочники, локальная база, поиск, контекстные меню, журнал, резервное копирование и справка. Реальные API ОФД, почтовый импорт и сверка ещё не реализованы. Не использовать для финансовой отчётности. Сборка не подписана цифровой подписью.'
+          gh release view $tag --json tagName *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $asset --title 'КОП Кассы 0.1.0 — предварительная версия' --notes $notes --prerelease --target $env:GITHUB_SHA
+          } else {
+            gh release upload $tag $asset --clobber
+            if ($LASTEXITCODE -eq 0) { gh release edit $tag --notes $notes --target $env:GITHUB_SHA }
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
