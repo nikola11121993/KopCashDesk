@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: windows-latest
@@ -73,12 +76,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v0.1.0-preview'
+          $tag = 'v0.2.0-preview'
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $notes = 'Начальная техническая версия. Работают справочники, локальная база, поиск, контекстные меню, журнал, резервное копирование и справка. Реальные API ОФД, почтовый импорт и сверка ещё не реализованы. Не использовать для финансовой отчётности. Сборка не подписана цифровой подписью.'
+          $notes = "Предварительная версия 0.2.0. Добавлены поля Такском: организация, название, сервер, Integrator-ID, логин и пароль. Пароль защищён Windows DPAPI и не хранится в базе. Сетевая авторизация ОФД, почтовый импорт и сверка ещё не реализованы. Не использовать для финансовой отчётности. Сборка не подписана цифровой подписью. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --title 'КОП Кассы 0.1.0 — предварительная версия' --notes $notes --prerelease --target $env:GITHUB_SHA
+            gh release create $tag $asset --title 'КОП Кассы 0.2.0 — настройки Такском' --notes $notes --prerelease --target $env:GITHUB_SHA
           } else {
             gh release upload $tag $asset --clobber
             if ($LASTEXITCODE -eq 0) { gh release edit $tag --notes $notes --target $env:GITHUB_SHA }
