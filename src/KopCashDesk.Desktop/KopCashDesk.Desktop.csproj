@@ -7,10 +7,11 @@
     <AssemblyName>KopCashDesk</AssemblyName>
     <RootNamespace>KopCashDesk.Desktop</RootNamespace>
     <ApplicationTitle>КОП Кассы</ApplicationTitle>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\KopCashDesk.Core\KopCashDesk.Core.csproj" />
     <ProjectReference Include="..\KopCashDesk.Data\KopCashDesk.Data.csproj" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
   </ItemGroup>
 </Project>
