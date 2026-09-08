@@ -1,0 +1,41 @@
+name: Windows build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore KopCashDesk.slnx
+      - name: Build
+        run: dotnet build KopCashDesk.slnx --configuration Release --no-restore
+      - name: Test
+        run: dotnet test tests/KopCashDesk.Tests/KopCashDesk.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=tests.trx"
+      - name: Publish Windows x64
+        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true --output artifacts/KopCashDesk
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path artifacts/KopCashDesk/* -DestinationPath artifacts/KopCashDesk-win-x64.zip
+      - name: Upload portable application
+        uses: actions/upload-artifact@v4
+        with:
+          name: KopCashDesk-win-x64
+          path: artifacts/KopCashDesk-win-x64.zip
+          if-no-files-found: error
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/*.trx'
+          if-no-files-found: ignore
