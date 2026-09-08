@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Restore
+      - name: Restore and security audit
         run: dotnet restore KopCashDesk.slnx
       - name: Build
         run: dotnet build KopCashDesk.slnx --configuration Release --no-restore
@@ -27,15 +27,27 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path artifacts/KopCashDesk/* -DestinationPath artifacts/KopCashDesk-win-x64.zip
       - name: Upload portable application
+        id: portable
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: KopCashDesk-win-x64
           path: artifacts/KopCashDesk-win-x64.zip
           if-no-files-found: error
+          retention-days: 1
       - name: Upload test results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: '**/TestResults/*.trx'
           if-no-files-found: ignore
+          retention-days: 1
+      - name: Report delivery status
+        if: always()
+        shell: pwsh
+        run: |
+          if ('${{ steps.portable.outcome }}' -ne 'success') {
+            "### Delivery not available`nCompilation and tests have separate results. The ZIP could not be uploaded; check the artifact storage quota. No downloadable binary is claimed." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
