@@ -76,12 +76,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v0.4.4-preview'
+          $tag = 'v0.4.5-preview'
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $notes = "Предварительная версия 0.4.4. Добавлен импорт кассовых XLSX/ZIP Такском «Сводный отчет по сменам». Программа берёт ИНН из имени файла, привязывает ККТ по ФН и названию к существующей точке, загружает дату закрытия, номер смены, наличные, безнал и общую выручку. Данные попадают в 'Свод по точкам' и повторный импорт не удваивает суммы. Commit: $env:GITHUB_SHA"
+          $notes = "Предварительная версия 0.4.5. Добавлено ручное объединение торговых точек с переносом операций, смен, ККТ, терминалов и ручных сумм. Добавлен отдельный редактор терминалов: TID, MID, провайдер, способ оплаты и перенос терминала на другую точку. ККТ с заводским номером 00106900361561 автоматически относится к 'Рефтинская ГРЭС 6 столовая'. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --title 'КОП Кассы 0.4.4 — импорт смен Такском' --notes $notes --prerelease --target $env:GITHUB_SHA
+            gh release create $tag $asset --title 'КОП Кассы 0.4.5 — слияние точек и терминалы' --notes $notes --prerelease --target $env:GITHUB_SHA
           } else {
             gh release upload $tag $asset --clobber
             if ($LASTEXITCODE -eq 0) { gh release edit $tag --notes $notes --target $env:GITHUB_SHA }
