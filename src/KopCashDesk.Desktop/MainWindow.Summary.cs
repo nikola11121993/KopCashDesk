@@ -116,19 +116,44 @@ public partial class MainWindow
 
             if (isChecked)
             {
-                _db.SetManualCashFromBank(row.OrganizationId, row.LocationId, row.DateValue, row.Sber.Value);
+                _db.SetManualCash(row.OrganizationId, row.LocationId, row.DateValue, row.Sber.Value);
                 StatusText.Text = $"{row.Point}: {row.Sber.Value:N2} ₽ внесено в кассу за {row.Date}";
             }
             else
             {
-                _db.ClearManualCashFromBank(row.OrganizationId, row.LocationId, row.DateValue);
+                _db.ClearManualCash(row.OrganizationId, row.LocationId, row.DateValue);
                 StatusText.Text = $"{row.Point}: ручная сумма кассы за {row.Date} снята";
             }
 
             RefreshData();
         }
 
-        dailyGrid = BuildDailySummaryGrid(ToggleSberCopy);
+        void EditManualCash(DaySummaryRow row)
+        {
+            if (row.HasActualFiscal)
+            {
+                MessageBox.Show("За этот день уже загружены реальные кассовые данные. Ручная сумма их не заменяет.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dialog = new ManualCashEditWindow(row.Point, row.DateValue, row.CashElectronic) { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+
+            if (dialog.ClearRequested)
+            {
+                _db.ClearManualCash(row.OrganizationId, row.LocationId, row.DateValue);
+                StatusText.Text = $"{row.Point}: ручная сумма кассы за {row.Date} очищена";
+            }
+            else if (dialog.Value is decimal value)
+            {
+                _db.SetManualCash(row.OrganizationId, row.LocationId, row.DateValue, value);
+                StatusText.Text = $"{row.Point}: касса за {row.Date} = {value:N2} ₽";
+            }
+
+            RefreshData();
+        }
+
+        dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash);
         monthlyGrid = BuildMonthlySummaryGrid();
 
         var tabs = new TabControl();
@@ -183,7 +208,7 @@ public partial class MainWindow
         return root;
     }
 
-    private static DataGrid BuildDailySummaryGrid(Action<DaySummaryRow, bool> toggleSberCopy)
+    private static DataGrid BuildDailySummaryGrid(Action<DaySummaryRow, bool> toggleSberCopy, Action<DaySummaryRow> editManualCash)
     {
         var grid = new DataGrid
         {
@@ -220,6 +245,29 @@ public partial class MainWindow
             CellTemplate = new DataTemplate { VisualTree = factory },
             Width = 75
         });
+
+        grid.MouseDoubleClick += (_, _) =>
+        {
+            if (grid.SelectedItem is DaySummaryRow row && string.Equals(grid.CurrentCell.Column?.Header?.ToString(), "Касса безнал", StringComparison.Ordinal))
+                editManualCash(row);
+        };
+
+        var menu = new ContextMenu();
+        var edit = new MenuItem { Header = "Изменить сумму кассы..." };
+        edit.Click += (_, _) =>
+        {
+            if (grid.SelectedItem is DaySummaryRow row) editManualCash(row);
+        };
+        menu.Items.Add(edit);
+
+        var copy = new MenuItem { Header = "Поставить сумму Сбера в кассу" };
+        copy.Click += (_, _) =>
+        {
+            if (grid.SelectedItem is DaySummaryRow row) toggleSberCopy(row, true);
+        };
+        menu.Items.Add(copy);
+        grid.ContextMenu = menu;
+
         return grid;
     }
 
@@ -264,7 +312,7 @@ public partial class MainWindow
         var hasManual = manual.TryGetValue((row.OrganizationId, row.LocationId, row.Date), out var manualElectronic);
         var hasActualFiscal = row.FiscalElectronic is not null;
         var cashElectronic = row.FiscalElectronic ?? (hasManual ? manualElectronic : null);
-        var copiedFromSber = !hasActualFiscal && hasManual;
+        var copiedFromSber = !hasActualFiscal && hasManual && row.BankElectronic is not null && manualElectronic == row.BankElectronic.Value;
         var difference = row.BankElectronic is not null && cashElectronic is not null
             ? cashElectronic - row.BankElectronic
             : null;
@@ -277,13 +325,13 @@ public partial class MainWindow
             difference, SummaryStatus(row.BankElectronic, cashElectronic, row.ShiftTotal, row.ShiftCount, difference, copiedFromSber));
     }
 
-    private static string SummaryStatus(decimal? bank, decimal? cash, decimal? shiftTotal, int shiftCount, decimal? difference, bool manualCash)
+    private static string SummaryStatus(decimal? bank, decimal? cash, decimal? shiftTotal, int shiftCount, decimal? difference, bool copiedFromSber)
     {
         if (bank is not null && cash is null && shiftCount == 0) return "Сбер загружен, кассы нет";
         if (bank is null && (cash is not null || shiftCount > 0)) return "Касса есть, Сбера нет";
         if (bank is not null && cash is not null)
         {
-            if (difference == 0m) return manualCash ? "Сошлось — внесено из Сбера" : "Сошлось";
+            if (difference == 0m) return copiedFromSber ? "Сошлось — внесено из Сбера" : "Сошлось";
             return "Есть расхождение";
         }
         if (shiftCount > 0 || shiftTotal is not null) return "Есть закрытие смены";
