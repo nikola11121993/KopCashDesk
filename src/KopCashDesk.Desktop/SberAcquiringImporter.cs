@@ -273,10 +273,16 @@ public sealed class SberAcquiringImporter
 
         if (!string.IsNullOrWhiteSpace(addressKey))
         {
-            var byAddress = organizationLocations.Where(x => NormalizeForMatch(x.Address) == addressKey).ToArray();
-            found = byAddress.Length == 1 ? byAddress[0] : byAddress.FirstOrDefault(x => NormalizeForMatch(x.Name) == nameKey);
+            found = organizationLocations.FirstOrDefault(x =>
+                NormalizeForMatch(x.Address) == addressKey && NormalizeForMatch(x.Name) == nameKey);
+
+            found ??= organizationLocations.FirstOrDefault(x =>
+                string.IsNullOrWhiteSpace(x.Address) && NormalizeForMatch(x.Name) == nameKey);
         }
-        found ??= organizationLocations.FirstOrDefault(x => NormalizeForMatch(x.Name) == nameKey);
+        else
+        {
+            found = organizationLocations.FirstOrDefault(x => NormalizeForMatch(x.Name) == nameKey);
+        }
 
         if (found is not null)
         {
