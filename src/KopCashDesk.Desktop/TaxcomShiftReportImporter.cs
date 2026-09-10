@@ -49,6 +49,9 @@ public sealed class TaxcomShiftReportImporter
 {
     private const string Source = "Taxcom.ShiftReport";
     private const long MaxWorkbookBytes = 100L * 1024 * 1024;
+    private const string ReftinskayaRegisterSerial = "00106900361561";
+    private const string ReftinskayaPointName = "Рефтинская ГРЭС 6 столовая";
+
     private readonly Database _database;
     private readonly Guid? _fallbackOrganizationId;
     private List<Organization> _organizations = [];
@@ -224,7 +227,7 @@ public sealed class TaxcomShiftReportImporter
                 continue;
             }
 
-            var location = ResolveLocation(organization, fn, registerNumber, kktName, pointName, summary);
+            var location = ResolveLocation(organization, fn, registerNumber, serial, kktName, pointName, summary);
             var shiftExternalId = BuildShiftExternalId(organization.TaxId, fn, registerNumber, serial, shiftNumber, closedAt);
 
             _database.Save(new ShiftClosure(
@@ -303,10 +306,27 @@ public sealed class TaxcomShiftReportImporter
         Organization organization,
         string fn,
         string registerNumber,
+        string serial,
         string kktName,
         string pointName,
         TaxcomShiftImportSummary summary)
     {
+        var organizationLocations = _locations.Where(x => x.OrganizationId == organization.Id).ToArray();
+        var knownPoint = KnownPointName(serial, kktName);
+        if (knownPoint is not null)
+        {
+            var location = FindKnownPoint(organizationLocations, knownPoint);
+            if (location is null)
+            {
+                location = new Location(Guid.NewGuid(), organization.Id, knownPoint, string.Empty, false);
+                _database.Save(location);
+                _locations.Add(location);
+                summary.LocationsCreated++;
+            }
+            EnsureRegisterBinding(organization, location, fn, registerNumber, summary);
+            return location;
+        }
+
         if (!string.IsNullOrWhiteSpace(fn) && _registers.TryGetValue(RegisterKey(organization.Id, fn), out var existingBinding))
         {
             var bound = _locations.FirstOrDefault(x => x.Id == existingBinding.LocationId);
@@ -315,12 +335,11 @@ public sealed class TaxcomShiftReportImporter
 
         var preferredName = PreferredPointName(kktName, pointName, fn);
         var nameKey = Normalize(preferredName);
-        var organizationLocations = _locations.Where(x => x.OrganizationId == organization.Id).ToArray();
 
         var byName = organizationLocations.Where(x => Normalize(x.Name) == nameKey).ToArray();
-        Location? location = byName.Length == 1 ? byName[0] : null;
+        Location? resolved = byName.Length == 1 ? byName[0] : null;
 
-        if (location is null && ContainsDigit(preferredName))
+        if (resolved is null && ContainsDigit(preferredName))
         {
             var byAddress = organizationLocations
                 .Where(x =>
@@ -330,26 +349,69 @@ public sealed class TaxcomShiftReportImporter
                            (address.Contains(nameKey, StringComparison.Ordinal) || nameKey.Contains(address, StringComparison.Ordinal));
                 })
                 .ToArray();
-            if (byAddress.Length == 1) location = byAddress[0];
+            if (byAddress.Length == 1) resolved = byAddress[0];
         }
 
-        if (location is null)
+        if (resolved is null)
         {
-            location = new Location(Guid.NewGuid(), organization.Id, preferredName, string.Empty, false);
-            _database.Save(location);
-            _locations.Add(location);
+            resolved = new Location(Guid.NewGuid(), organization.Id, preferredName, string.Empty, false);
+            _database.Save(resolved);
+            _locations.Add(resolved);
             summary.LocationsCreated++;
         }
 
-        if (!string.IsNullOrWhiteSpace(fn))
+        EnsureRegisterBinding(organization, resolved, fn, registerNumber, summary);
+        return resolved;
+    }
+
+    private void EnsureRegisterBinding(Organization organization, Location location, string fn, string registerNumber, TaxcomShiftImportSummary summary)
+    {
+        if (string.IsNullOrWhiteSpace(fn)) return;
+        var key = RegisterKey(organization.Id, fn);
+        if (_registers.TryGetValue(key, out var existing) &&
+            existing.LocationId == location.Id &&
+            string.Equals(DigitsOnly(existing.RegisterNumber), DigitsOnly(registerNumber), StringComparison.Ordinal))
+            return;
+
+        var binding = new RegisterBinding(existing?.Id ?? Guid.NewGuid(), organization.Id, location.Id, fn, registerNumber);
+        _database.SaveRegisterBinding(binding);
+        _registers[key] = binding;
+        summary.RegistersBound++;
+    }
+
+    private static string? KnownPointName(string serial, string kktName)
+    {
+        if (DigitsOnly(serial) == ReftinskayaRegisterSerial || DigitsOnly(kktName) == ReftinskayaRegisterSerial)
+            return ReftinskayaPointName;
+        return null;
+    }
+
+    private static Location? FindKnownPoint(IEnumerable<Location> locations, string knownPoint)
+    {
+        var list = locations.ToArray();
+        var exact = list.Where(x => Normalize(x.Name) == Normalize(knownPoint)).ToArray();
+        if (exact.Length == 1) return exact[0];
+
+        if (knownPoint == ReftinskayaPointName)
         {
-            var binding = new RegisterBinding(Guid.NewGuid(), organization.Id, location.Id, fn, registerNumber);
-            _database.SaveRegisterBinding(binding);
-            _registers[RegisterKey(organization.Id, fn)] = binding;
-            summary.RegistersBound++;
+            var cafeteria6 = list.Where(x =>
+            {
+                var name = Normalize(x.Name);
+                return name.Contains("рефтин", StringComparison.Ordinal) &&
+                       name.Contains("грэс", StringComparison.Ordinal) &&
+                       (name.Contains("6 стол", StringComparison.Ordinal) || name.Contains("столовая 6", StringComparison.Ordinal));
+            }).ToArray();
+            if (cafeteria6.Length == 1) return cafeteria6[0];
+
+            var gres = list.Where(x =>
+            {
+                var name = Normalize(x.Name);
+                return name.Contains("рефтин", StringComparison.Ordinal) && name.Contains("грэс", StringComparison.Ordinal);
+            }).ToArray();
+            if (gres.Length == 1) return gres[0];
         }
 
-        return location;
+        return null;
     }
 
     private static string PreferredPointName(string kktName, string pointName, string fn)
