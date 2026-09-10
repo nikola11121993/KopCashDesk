@@ -5,6 +5,7 @@ using KopCashDesk.Core;
 using KopCashDesk.Data;
 using KopCashDesk.Desktop;
 using Xunit;
+using CoreLocation = KopCashDesk.Core.Location;
 
 namespace KopCashDesk.Tests;
 
@@ -39,7 +40,7 @@ public sealed class TaxcomShiftReportImportTests
             var database = new Database(databasePath);
             database.Initialize();
             var organization = new Organization(Guid.NewGuid(), "ООО КОП", "6683009222");
-            var location = new Location(Guid.NewGuid(), organization.Id, "Ладыженского 7", "Свердловская обл., Асбест, ул. Ладыженского, 7");
+            var location = new CoreLocation(Guid.NewGuid(), organization.Id, "Ладыженского 7", "Свердловская обл., Асбест, ул. Ладыженского, 7");
             database.Save(organization);
             database.Save(location);
 
@@ -58,14 +59,14 @@ public sealed class TaxcomShiftReportImportTests
 
             var days = database.PointDaySummaries(organization.Id, 2026, 9, location.Id);
             Assert.Equal(2, days.Count);
-            var september10 = Assert.Single(days.Where(x => x.Date == new DateOnly(2026, 9, 10)));
+            var september10 = Assert.Single(days, x => x.Date == new DateOnly(2026, 9, 10));
             Assert.Equal(17460m, september10.FiscalElectronic);
             Assert.Equal(17460m, september10.ShiftTotal);
             Assert.Equal(0m, september10.ShiftCash);
             Assert.Equal(17460m, september10.ShiftElectronic);
             Assert.Equal(1, september10.ShiftCount);
 
-            var september9 = Assert.Single(days.Where(x => x.Date == new DateOnly(2026, 9, 9)));
+            var september9 = Assert.Single(days, x => x.Date == new DateOnly(2026, 9, 9));
             Assert.Equal(9715m, september9.FiscalElectronic);
             Assert.Equal(10055m, september9.ShiftTotal);
             Assert.Equal(340m, september9.ShiftCash);
@@ -77,8 +78,8 @@ public sealed class TaxcomShiftReportImportTests
 
             var afterRepeat = database.PointDaySummaries(organization.Id, 2026, 9, location.Id);
             Assert.Equal(2, afterRepeat.Count);
-            Assert.Equal(17460m, Assert.Single(afterRepeat.Where(x => x.Date == new DateOnly(2026, 9, 10))).FiscalElectronic);
-            Assert.Equal(9715m, Assert.Single(afterRepeat.Where(x => x.Date == new DateOnly(2026, 9, 9))).FiscalElectronic);
+            Assert.Equal(17460m, Assert.Single(afterRepeat, x => x.Date == new DateOnly(2026, 9, 10)).FiscalElectronic);
+            Assert.Equal(9715m, Assert.Single(afterRepeat, x => x.Date == new DateOnly(2026, 9, 9)).FiscalElectronic);
         }
         finally
         {
