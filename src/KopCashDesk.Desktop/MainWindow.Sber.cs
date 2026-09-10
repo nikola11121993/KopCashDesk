@@ -17,8 +17,9 @@ public partial class MainWindow
 
     private UIElement RenderOperations()
     {
-        PageTitle.Text = "Операции";
-        PageSubtitle.Text = "Загруженные операции по кассам и эквайрингу";
+        var summary = RenderSummary();
+        PageTitle.Text = "Свод по точкам";
+        PageSubtitle.Text = "Суммы по точкам, месяцам и дням; все операции остаются во второй вкладке";
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -30,7 +31,17 @@ public partial class MainWindow
         toolbar.Children.Add(import);
         root.Children.Add(toolbar);
 
-        var rows = _db.Operations(SelectedOrganizationId)
+        var tabs = new TabControl();
+        tabs.Items.Add(new TabItem { Header = "Свод по точкам", Content = summary });
+        tabs.Items.Add(new TabItem { Header = "Все операции", Content = BuildOperationsGrid() });
+        Grid.SetRow(tabs, 1);
+        root.Children.Add(tabs);
+        return root;
+    }
+
+    private UIElement BuildOperationsGrid()
+    {
+        var rows = _db.Operations(SelectedOrganizationId, 50000)
             .Select(x => new
             {
                 Date = x.OccurredAt.LocalDateTime.ToString("dd.MM.yyyy HH:mm:ss"),
@@ -43,14 +54,9 @@ public partial class MainWindow
             .ToArray();
 
         if (rows.Length == 0)
-        {
-            var empty = Text("Операций пока нет. Перетащите архивы Сбер в окно импорта или выберите их через кнопку выше.", 15);
-            Grid.SetRow(empty, 1);
-            root.Children.Add(empty);
-            return root;
-        }
+            return Text("Операций пока нет. Импортируйте отчёты Сбер.", 15);
 
-        var grid = new DataGrid { ItemsSource = rows, IsReadOnly = true };
+        var grid = new DataGrid { ItemsSource = rows, IsReadOnly = true, AutoGenerateColumns = false };
         grid.Columns.Add(new DataGridTextColumn { Header = "Дата и время", Binding = new System.Windows.Data.Binding("Date"), Width = 155 });
         grid.Columns.Add(new DataGridTextColumn { Header = "Организация", Binding = new System.Windows.Data.Binding("Organization"), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
         grid.Columns.Add(new DataGridTextColumn { Header = "Точка", Binding = new System.Windows.Data.Binding("Point"), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
@@ -72,9 +78,6 @@ public partial class MainWindow
         };
         menu.Items.Add(copy);
         grid.ContextMenu = menu;
-
-        Grid.SetRow(grid, 1);
-        root.Children.Add(grid);
-        return root;
+        return grid;
     }
 }
