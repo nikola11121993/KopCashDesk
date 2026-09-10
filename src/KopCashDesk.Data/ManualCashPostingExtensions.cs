@@ -71,7 +71,7 @@ public static class ManualCashPostingExtensions
         return result;
     }
 
-    public static void SetManualCashFromBank(
+    public static void SetManualCash(
         this Database database,
         Guid organizationId,
         Guid locationId,
@@ -82,6 +82,7 @@ public static class ManualCashPostingExtensions
         using var db = Open(database);
         using var transaction = db.BeginTransaction();
         var now = DateTimeOffset.UtcNow.ToString("O");
+        electronic = Money.Normalize(electronic);
 
         using (var command = db.CreateCommand())
         {
@@ -101,12 +102,20 @@ public static class ManualCashPostingExtensions
             command.ExecuteNonQuery();
         }
 
-        Audit(db, transaction, "manual_cash.set_from_bank",
-            $"org={organizationId}; loc={locationId}; date={date:yyyy-MM-dd}; amount={Money.Normalize(electronic):0.00}");
+        Audit(db, transaction, "manual_cash.set",
+            $"org={organizationId}; loc={locationId}; date={date:yyyy-MM-dd}; amount={electronic:0.00}");
         transaction.Commit();
     }
 
-    public static void ClearManualCashFromBank(
+    public static void SetManualCashFromBank(
+        this Database database,
+        Guid organizationId,
+        Guid locationId,
+        DateOnly date,
+        decimal electronic) =>
+        database.SetManualCash(organizationId, locationId, date, electronic);
+
+    public static void ClearManualCash(
         this Database database,
         Guid organizationId,
         Guid locationId,
@@ -130,6 +139,13 @@ public static class ManualCashPostingExtensions
             $"org={organizationId}; loc={locationId}; date={date:yyyy-MM-dd}");
         transaction.Commit();
     }
+
+    public static void ClearManualCashFromBank(
+        this Database database,
+        Guid organizationId,
+        Guid locationId,
+        DateOnly date) =>
+        database.ClearManualCash(organizationId, locationId, date);
 
     private static SqliteConnection Open(Database database)
     {
