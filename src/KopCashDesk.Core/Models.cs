@@ -23,6 +23,33 @@ public sealed record OperationView(
     PaymentKind Payment,
     decimal Amount);
 
+public sealed record ShiftClosure(
+    string Source,
+    string ExternalId,
+    Guid OrganizationId,
+    Guid LocationId,
+    DateTimeOffset ClosedAt,
+    decimal Total,
+    decimal Cash,
+    decimal Electronic,
+    string FiscalDriveNumber = "",
+    int? ShiftNumber = null,
+    string? SourceDocumentId = null);
+
+public sealed record PointDaySummary(
+    DateOnly Date,
+    Guid OrganizationId,
+    string Organization,
+    Guid LocationId,
+    string Location,
+    decimal BankElectronic,
+    decimal? FiscalElectronic,
+    decimal? ShiftTotal,
+    decimal? ShiftCash,
+    decimal? ShiftElectronic,
+    int ShiftCount,
+    DateTimeOffset? LastShiftClosedAt);
+
 public sealed record Reconciliation(decimal? FiscalElectronic, decimal? BankElectronic, decimal? Difference, string Status);
 
 public static class ReconciliationRules
