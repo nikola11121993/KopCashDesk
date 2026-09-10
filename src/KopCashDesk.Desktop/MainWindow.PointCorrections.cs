@@ -8,6 +8,8 @@ public partial class MainWindow
 {
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        _db.EnsureManualCashPostings();
+
         var merged = 0;
         merged += _db.MergeLocationsByName("Вороний Брод", "Мира 4", "касса перемещалась: Вороний Брод -> Ленинградская 1 -> Мира 4");
         merged += _db.MergeLocationsByName("Ленинградская 1", "Мира 4", "касса перемещалась: Вороний Брод -> Ленинградская 1 -> Мира 4");
