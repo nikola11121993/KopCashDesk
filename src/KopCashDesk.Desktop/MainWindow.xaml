@@ -55,7 +55,7 @@
           <Button Content="Рабочий стол" Tag="home" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Организации" Tag="organizations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Торговые точки" Tag="locations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
-          <Button Content="Свод по точкам" Tag="summary" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
+          <Button Content="Свод по точкам" Tag="operations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Операции" Tag="operations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Сверка" Tag="reconciliation" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Separator Margin="4,12"/>
