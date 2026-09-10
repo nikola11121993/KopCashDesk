@@ -102,6 +102,9 @@ public partial class MainWindow
         Grid.SetRow(totals, 1);
         root.Children.Add(totals);
 
+        DataGrid dailyGrid = null!;
+        DataGrid monthlyGrid = null!;
+
         void ToggleSberCopy(DaySummaryRow row, bool isChecked)
         {
             if (!row.CanCopySber || row.Sber is null)
@@ -125,8 +128,8 @@ public partial class MainWindow
             RefreshData();
         }
 
-        var dailyGrid = BuildDailySummaryGrid(ToggleSberCopy);
-        var monthlyGrid = BuildMonthlySummaryGrid();
+        dailyGrid = BuildDailySummaryGrid(ToggleSberCopy);
+        monthlyGrid = BuildMonthlySummaryGrid();
 
         var tabs = new TabControl();
         tabs.Items.Add(new TabItem { Header = "По дням", Content = dailyGrid });
