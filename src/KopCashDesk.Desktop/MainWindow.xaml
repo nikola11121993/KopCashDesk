@@ -1,4 +1,4 @@
-<Window x:Class="KopCashDesk.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="КОП Кассы — рабочее место" Width="1360" Height="850" MinWidth="980" MinHeight="620" WindowStartupLocation="CenterScreen" Background="#F5F7FA">
+<Window x:Class="KopCashDesk.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="КОП Кассы — рабочее место" Width="1360" Height="850" MinWidth="980" MinHeight="620" WindowStartupLocation="CenterScreen" Background="#F5F7FA" Loaded="MainWindow_Loaded">
   <DockPanel>
     <Menu DockPanel.Dock="Top">
       <MenuItem Header="_Файл">
@@ -35,8 +35,8 @@
         </StackPanel>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <TextBlock Text="Организация:" VerticalAlignment="Center" Margin="12,0,8,0"/>
-          <ComboBox x:Name="OrganizationFilter" Width="260" DisplayMemberPath="Name" SelectionChanged="OrganizationFilter_SelectionChanged"/>
-          <Button Content="Обновить" Click="Refresh_Click"/>
+          <ComboBox x:Name="OrganizationFilter" Width="260" DisplayMemberPath="Name" SelectionChanged="OrganizationFilter_SelectionChangedV04"/>
+          <Button Content="Обновить" Click="RefreshV04_Click"/>
         </StackPanel>
       </DockPanel>
     </Border>
@@ -45,7 +45,7 @@
       <Separator/>
       <StatusBarItem><TextBlock x:Name="DatabaseText"/></StatusBarItem>
       <Separator/>
-      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.0"/></StatusBarItem>
+      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.1"/></StatusBarItem>
     </StatusBar>
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="225"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -55,7 +55,7 @@
           <Button Content="Рабочий стол" Tag="home" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Организации" Tag="organizations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Торговые точки" Tag="locations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
-          <Button Content="Свод по точкам" Tag="operations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
+          <Button Content="Свод по точкам" Click="Summary_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Операции" Tag="operations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Сверка" Tag="reconciliation" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Separator Margin="4,12"/>
