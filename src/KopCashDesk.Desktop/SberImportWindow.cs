@@ -9,6 +9,7 @@ namespace KopCashDesk.Desktop;
 
 public sealed class SberImportWindow : Window
 {
+    private const string SberSource = "Sber.Acquiring";
     private readonly Database _database;
     private readonly Action _afterImport;
     private readonly List<string> _files = [];
@@ -157,9 +158,15 @@ public sealed class SberImportWindow : Window
         _result.Text = "Импорт...";
         try
         {
+            var totalBefore = _database.SumOperations(SberSource);
             var files = _files.ToArray();
             var summary = await Task.Run(() => new SberAcquiringImporter(_database).ImportFiles(files));
-            _result.Text = summary.ToDisplayText();
+            var totalAfter = _database.SumOperations(SberSource);
+            var newAmount = totalAfter - totalBefore;
+
+            _result.Text = summary.ToDisplayText() +
+                           $"\n\nСумма новых операций: {newAmount:N2} ₽" +
+                           $"\nОБЩАЯ СУММА СБЕР: {totalAfter:N2} ₽";
             _afterImport();
         }
         catch (Exception ex)
