@@ -8,6 +8,7 @@ public static class LocationMergeExtensions
     public static bool MergeLocations(this Database database, Guid sourceLocationId, Guid targetLocationId, string reason = "")
     {
         if (sourceLocationId == targetLocationId) return false;
+        database.EnsureManualCashPostings();
 
         using var db = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -23,6 +24,9 @@ public static class LocationMergeExtensions
         if (source is null || target is null) return false;
         if (source.Value.OrganizationId != target.Value.OrganizationId)
             throw new InvalidOperationException("Нельзя объединять точки разных организаций.");
+
+        EnsureManualCashCanMerge(db, transaction, sourceLocationId, targetLocationId);
+        MoveManualCashPostings(db, transaction, sourceLocationId, targetLocationId);
 
         UpdateLocationReference(db, transaction, "operations", sourceLocationId, targetLocationId);
         UpdateLocationReference(db, transaction, "shift_closures", sourceLocationId, targetLocationId);
@@ -67,6 +71,51 @@ public static class LocationMergeExtensions
         }
 
         return merges;
+    }
+
+    private static void EnsureManualCashCanMerge(SqliteConnection db, SqliteTransaction transaction, Guid source, Guid target)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM manual_cash_postings s
+            JOIN manual_cash_postings t
+              ON t.organization_id=s.organization_id
+             AND t.business_date=s.business_date
+             AND t.location_id=$target
+            WHERE s.location_id=$source
+              AND s.electronic_kopecks<>t.electronic_kopecks
+            """;
+        command.Parameters.AddWithValue("$source", source.ToString());
+        command.Parameters.AddWithValue("$target", target.ToString());
+        var conflicts = Convert.ToInt32(command.ExecuteScalar());
+        if (conflicts > 0)
+            throw new InvalidOperationException("Нельзя объединить точки: на одинаковые даты есть разные ручные суммы кассы. Сначала исправьте или очистите эти суммы в своде.");
+    }
+
+    private static void MoveManualCashPostings(SqliteConnection db, SqliteTransaction transaction, Guid source, Guid target)
+    {
+        using (var insert = db.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT OR IGNORE INTO manual_cash_postings(
+                    organization_id,location_id,business_date,electronic_kopecks,created_at,updated_at)
+                SELECT organization_id,$target,business_date,electronic_kopecks,created_at,updated_at
+                FROM manual_cash_postings
+                WHERE location_id=$source
+                """;
+            insert.Parameters.AddWithValue("$source", source.ToString());
+            insert.Parameters.AddWithValue("$target", target.ToString());
+            insert.ExecuteNonQuery();
+        }
+
+        using var delete = db.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = "DELETE FROM manual_cash_postings WHERE location_id=$source";
+        delete.Parameters.AddWithValue("$source", source.ToString());
+        delete.ExecuteNonQuery();
     }
 
     private static (Guid OrganizationId, string Name)? ReadLocation(SqliteConnection db, SqliteTransaction transaction, Guid id)
