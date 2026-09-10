@@ -76,12 +76,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v0.4.0-preview'
+          $tag = 'v0.4.1-preview'
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $notes = "Предварительная версия 0.4.0. Годовые и месячные отчёты Сбер читаются по всем листам. Добавлен свод по торговым точкам с фильтрами по году, месяцу и точке, отдельными таблицами по дням и месяцам, общей суммой Сбер и местом для данных закрытия смен: сумма, количество и дата закрытия. Детальные операции сохранены отдельной вкладкой. Commit: $env:GITHUB_SHA"
+          $notes = "Предварительная версия 0.4.1. Объединены исторические точки с переносом всех операций, терминалов и закрытий смен: Вороний Брод и Ленинградская 1 -> Мира 4; Буфет -> Чапаева 28. Исправлен переход в Свод по точкам. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --title 'КОП Кассы 0.4.0 — свод по точкам' --notes $notes --prerelease --target $env:GITHUB_SHA
+            gh release create $tag $asset --title 'КОП Кассы 0.4.1 — объединение точек' --notes $notes --prerelease --target $env:GITHUB_SHA
           } else {
             gh release upload $tag $asset --clobber
             if ($LASTEXITCODE -eq 0) { gh release edit $tag --notes $notes --target $env:GITHUB_SHA }
