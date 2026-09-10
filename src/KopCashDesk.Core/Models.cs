@@ -42,7 +42,7 @@ public sealed record PointDaySummary(
     string Organization,
     Guid LocationId,
     string Location,
-    decimal BankElectronic,
+    decimal? BankElectronic,
     decimal? FiscalElectronic,
     decimal? ShiftTotal,
     decimal? ShiftCash,
