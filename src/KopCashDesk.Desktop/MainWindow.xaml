@@ -13,6 +13,9 @@
       <MenuItem Header="_Справочники">
         <MenuItem Header="Организации" Click="Organizations_Click"/>
         <MenuItem Header="Торговые точки" Click="Locations_Click"/>
+        <MenuItem Header="Терминалы" Click="Terminals_Click"/>
+        <Separator/>
+        <MenuItem Header="Объединить торговые точки..." Click="MergeLocations_Click"/>
       </MenuItem>
       <MenuItem Header="_Сервис">
         <MenuItem Header="Импорт архивов Сбер..." Click="SberImport_Click"/>
@@ -47,7 +50,7 @@
       <Separator/>
       <StatusBarItem><TextBlock x:Name="DatabaseText"/></StatusBarItem>
       <Separator/>
-      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.4"/></StatusBarItem>
+      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.5"/></StatusBarItem>
     </StatusBar>
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="225"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -57,6 +60,8 @@
           <Button Content="Рабочий стол" Tag="home" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Организации" Tag="organizations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Торговые точки" Tag="locations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
+          <Button Content="Терминалы" Click="Terminals_Click" HorizontalContentAlignment="Left"/>
+          <Button Content="Объединить точки" Click="MergeLocations_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Свод по точкам" Click="Summary_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Операции" Tag="operations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Сверка" Tag="reconciliation" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
