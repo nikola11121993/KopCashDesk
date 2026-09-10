@@ -14,6 +14,7 @@ public partial class MainWindow
         merged += _db.MergeLocationsByName("Вороний Брод", "Мира 4", "касса перемещалась: Вороний Брод -> Ленинградская 1 -> Мира 4");
         merged += _db.MergeLocationsByName("Ленинградская 1", "Мира 4", "касса перемещалась: Вороний Брод -> Ленинградская 1 -> Мира 4");
         merged += _db.MergeLocationsByName("Буфет", "Чапаева 28", "одна торговая точка по адресу Чапаева, 28");
+        merged += MergeKnownReftinskayaDuplicate();
 
         if (merged > 0)
         {
@@ -21,6 +22,37 @@ public partial class MainWindow
             StatusText.Text = $"Объединено торговых точек: {merged}";
         }
     }
+
+    private int MergeKnownReftinskayaDuplicate()
+    {
+        const string registerSerial = "00106900361561";
+        var locations = _db.Locations();
+        var merged = 0;
+
+        foreach (var group in locations.GroupBy(x => x.OrganizationId))
+        {
+            var targets = group.Where(x =>
+            {
+                var name = NormalizePointName(x.Name);
+                return name.Contains("рефтин", StringComparison.Ordinal) && name.Contains("грэс", StringComparison.Ordinal);
+            }).ToArray();
+            if (targets.Length != 1) continue;
+
+            var sources = group.Where(x => x.Id != targets[0].Id && DigitsOnlyPointName(x.Name).Contains(registerSerial, StringComparison.Ordinal)).ToArray();
+            foreach (var source in sources)
+            {
+                if (_db.MergeLocations(source.Id, targets[0].Id, $"ККТ {registerSerial} = Рефтинская ГРЭС 6 столовая"))
+                    merged++;
+            }
+        }
+
+        return merged;
+    }
+
+    private static string NormalizePointName(string value) =>
+        string.Join(' ', value.Trim().ToLowerInvariant().Replace('ё', 'е').Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+    private static string DigitsOnlyPointName(string value) => new(value.Where(char.IsDigit).ToArray());
 
     private void Summary_Click(object sender, RoutedEventArgs e)
     {
