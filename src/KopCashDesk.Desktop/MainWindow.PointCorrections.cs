@@ -41,6 +41,13 @@ public partial class MainWindow
             PageContent.Content = RenderSummary();
             return;
         }
+        if (_page == "terminals")
+        {
+            SearchBox.IsEnabled = false;
+            PrimaryButton.Visibility = Visibility.Collapsed;
+            PageContent.Content = RenderTerminals();
+            return;
+        }
         Render();
     }
 
@@ -52,6 +59,12 @@ public partial class MainWindow
             SearchBox.IsEnabled = false;
             PrimaryButton.Visibility = Visibility.Collapsed;
             PageContent.Content = RenderSummary();
+        }
+        else if (_page == "terminals")
+        {
+            SearchBox.IsEnabled = false;
+            PrimaryButton.Visibility = Visibility.Collapsed;
+            PageContent.Content = RenderTerminals();
         }
     }
 }
