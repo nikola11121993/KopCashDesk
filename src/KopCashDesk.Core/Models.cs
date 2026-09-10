@@ -14,6 +14,15 @@ public sealed record CashOperation(
     DateTimeOffset OccurredAt, SourceKind SourceKind, OperationKind Kind,
     PaymentKind Payment, decimal Amount, string? SourceDocumentId = null);
 
+public sealed record OperationView(
+    DateTimeOffset OccurredAt,
+    string Organization,
+    string Location,
+    string Source,
+    OperationKind Kind,
+    PaymentKind Payment,
+    decimal Amount);
+
 public sealed record Reconciliation(decimal? FiscalElectronic, decimal? BankElectronic, decimal? Difference, string Status);
 
 public static class ReconciliationRules
