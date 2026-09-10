@@ -1,4 +1,5 @@
 using KopCashDesk.Desktop;
+using Xunit;
 
 namespace KopCashDesk.Tests;
 
