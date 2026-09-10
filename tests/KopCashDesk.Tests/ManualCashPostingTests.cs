@@ -20,15 +20,15 @@ public sealed class ManualCashPostingTests
         db.Save(location);
 
         var date = new DateOnly(2026, 9, 10);
-        db.SetManualCashFromBank(organization.Id, location.Id, date, 1234.56m);
+        db.SetManualCash(organization.Id, location.Id, date, 1234.567m);
         var first = Assert.Single(db.ManualCashPostings(organization.Id, 2026, 9, location.Id));
-        Assert.Equal(1234.56m, first.Electronic);
+        Assert.Equal(1234.57m, first.Electronic);
 
-        db.SetManualCashFromBank(organization.Id, location.Id, date, 1500m);
+        db.SetManualCash(organization.Id, location.Id, date, 1500m);
         var updated = Assert.Single(db.ManualCashPostings(organization.Id, 2026, 9, location.Id));
         Assert.Equal(1500m, updated.Electronic);
 
-        db.ClearManualCashFromBank(organization.Id, location.Id, date);
+        db.ClearManualCash(organization.Id, location.Id, date);
         Assert.Empty(db.ManualCashPostings(organization.Id, 2026, 9, location.Id));
     }
 }
