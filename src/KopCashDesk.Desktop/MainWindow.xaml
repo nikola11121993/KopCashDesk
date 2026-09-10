@@ -45,7 +45,7 @@
       <Separator/>
       <StatusBarItem><TextBlock x:Name="DatabaseText"/></StatusBarItem>
       <Separator/>
-      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.1"/></StatusBarItem>
+      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.2"/></StatusBarItem>
     </StatusBar>
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="225"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
