@@ -1,5 +1,6 @@
 using KopCashDesk.Core;
 using KopCashDesk.Data;
+using Xunit;
 
 namespace KopCashDesk.Tests;
 
