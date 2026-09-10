@@ -1,3 +1,4 @@
+using KopCashDesk.Core;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 
