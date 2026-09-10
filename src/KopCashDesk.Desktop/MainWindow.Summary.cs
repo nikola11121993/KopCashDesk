@@ -1,4 +1,5 @@
 using KopCashDesk.Core;
+using KopCashDesk.Data;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
@@ -18,7 +19,10 @@ public partial class MainWindow
         string Organization,
         string Point,
         decimal? Sber,
-        decimal? FiscalElectronic,
+        decimal? CashElectronic,
+        bool HasActualFiscal,
+        bool CashFromSber,
+        bool CanCopySber,
         decimal? ShiftTotal,
         int ShiftCount,
         DateTimeOffset? LastClosedAt,
@@ -37,7 +41,7 @@ public partial class MainWindow
         string Organization,
         string Point,
         decimal? Sber,
-        decimal? FiscalElectronic,
+        decimal? CashElectronic,
         decimal? ShiftTotal,
         int ShiftCount,
         DateTimeOffset? LastClosedAt,
@@ -98,7 +102,30 @@ public partial class MainWindow
         Grid.SetRow(totals, 1);
         root.Children.Add(totals);
 
-        var dailyGrid = BuildDailySummaryGrid();
+        void ToggleSberCopy(DaySummaryRow row, bool isChecked)
+        {
+            if (!row.CanCopySber || row.Sber is null)
+            {
+                MessageBox.Show("На этот день нельзя автоматически перенести сумму: либо нет Сбера, либо уже загружены реальные кассовые данные.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+                RefreshData();
+                return;
+            }
+
+            if (isChecked)
+            {
+                _db.SetManualCashFromBank(row.OrganizationId, row.LocationId, row.DateValue, row.Sber.Value);
+                StatusText.Text = $"{row.Point}: {row.Sber.Value:N2} ₽ внесено в кассу за {row.Date}";
+            }
+            else
+            {
+                _db.ClearManualCashFromBank(row.OrganizationId, row.LocationId, row.DateValue);
+                StatusText.Text = $"{row.Point}: ручная сумма кассы за {row.Date} снята";
+            }
+
+            RefreshData();
+        }
+
+        var dailyGrid = BuildDailySummaryGrid(ToggleSberCopy);
         var monthlyGrid = BuildMonthlySummaryGrid();
 
         var tabs = new TabControl();
@@ -113,23 +140,26 @@ public partial class MainWindow
             var month = (monthBox.SelectedItem as MonthOption)?.Number;
             var locationId = (locationBox.SelectedItem as LocationOption)?.Id;
             var rows = _db.PointDaySummaries(SelectedOrganizationId, year, month, locationId);
+            var manual = _db.ManualCashPostings(SelectedOrganizationId, year, month, locationId)
+                .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
 
-            var dayRows = rows.Select(ToDayRow).OrderByDescending(x => x.DateValue).ThenBy(x => x.Point).ToArray();
+            var dayRows = rows.Select(x => ToDayRow(x, manual)).OrderByDescending(x => x.DateValue).ThenBy(x => x.Point).ToArray();
             dailyGrid.ItemsSource = dayRows;
 
-            var monthRows = rows
-                .GroupBy(x => new { x.Date.Year, x.Date.Month, x.OrganizationId, x.Organization, x.LocationId, x.Location })
+            var monthRows = dayRows
+                .GroupBy(x => new { x.DateValue.Year, x.DateValue.Month, x.OrganizationId, x.Organization, x.LocationId, x.Point })
                 .Select(g =>
                 {
-                    var bank = SumNullable(g.Select(x => x.BankElectronic));
-                    var fiscal = SumNullable(g.Select(x => x.FiscalElectronic));
+                    var bank = SumNullable(g.Select(x => x.Sber));
+                    var cash = SumNullable(g.Select(x => x.CashElectronic));
                     var shiftTotal = SumNullable(g.Select(x => x.ShiftTotal));
-                    var difference = bank is not null && fiscal is not null ? fiscal - bank : null;
-                    var lastClosed = g.Where(x => x.LastShiftClosedAt is not null).Select(x => x.LastShiftClosedAt).Max();
+                    var difference = bank is not null && cash is not null ? cash - bank : null;
+                    var lastClosed = g.Where(x => x.LastClosedAt is not null).Select(x => x.LastClosedAt).Max();
+                    var copied = g.Any(x => x.CashFromSber);
                     return new MonthSummaryRow(
-                        g.Key.Year, g.Key.Month, g.Key.OrganizationId, g.Key.LocationId, g.Key.Organization, g.Key.Location,
-                        bank, fiscal, shiftTotal, g.Sum(x => x.ShiftCount), lastClosed, difference,
-                        SummaryStatus(bank, fiscal, shiftTotal, g.Sum(x => x.ShiftCount), difference));
+                        g.Key.Year, g.Key.Month, g.Key.OrganizationId, g.Key.LocationId, g.Key.Organization, g.Key.Point,
+                        bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), lastClosed, difference,
+                        SummaryStatus(bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), difference, copied));
                 })
                 .OrderByDescending(x => x.Year)
                 .ThenByDescending(x => x.Month)
@@ -137,10 +167,10 @@ public partial class MainWindow
                 .ToArray();
             monthlyGrid.ItemsSource = monthRows;
 
-            var bankTotal = SumNullable(rows.Select(x => x.BankElectronic));
-            var fiscalTotal = SumNullable(rows.Select(x => x.FiscalElectronic));
-            var shiftGrandTotal = SumNullable(rows.Select(x => x.ShiftTotal));
-            totals.Text = $"Сбер за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(fiscalTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}";
+            var bankTotal = SumNullable(dayRows.Select(x => x.Sber));
+            var cashTotal = SumNullable(dayRows.Select(x => x.CashElectronic));
+            var shiftGrandTotal = SumNullable(dayRows.Select(x => x.ShiftTotal));
+            totals.Text = $"Сбер за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}";
         }
 
         yearBox.SelectionChanged += (_, _) => RefreshData();
@@ -150,60 +180,109 @@ public partial class MainWindow
         return root;
     }
 
-    private static DataGrid BuildDailySummaryGrid()
+    private static DataGrid BuildDailySummaryGrid(Action<DaySummaryRow, bool> toggleSberCopy)
     {
-        var grid = new DataGrid { IsReadOnly = true, AutoGenerateColumns = false, SelectionMode = DataGridSelectionMode.Single };
-        grid.Columns.Add(new DataGridTextColumn { Header = "Дата", Binding = new Binding("Date"), Width = 105 });
-        grid.Columns.Add(new DataGridTextColumn { Header = "Точка", Binding = new Binding("Point"), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
+        var grid = new DataGrid
+        {
+            IsReadOnly = true,
+            AutoGenerateColumns = false,
+            SelectionMode = DataGridSelectionMode.Single,
+            CanUserAddRows = false,
+            CanUserDeleteRows = false
+        };
+        grid.Columns.Add(TextColumn("Дата", "Date", 105));
+        grid.Columns.Add(TextColumn("Точка", "Point", new DataGridLength(2, DataGridLengthUnitType.Star)));
         grid.Columns.Add(MoneyColumn("Терминалы Сбер", "Sber", 130));
-        grid.Columns.Add(MoneyColumn("Касса безнал", "FiscalElectronic", 125));
+        grid.Columns.Add(MoneyColumn("Касса безнал", "CashElectronic", 125));
         grid.Columns.Add(MoneyColumn("Закрыто сменой", "ShiftTotal", 135));
-        grid.Columns.Add(new DataGridTextColumn { Header = "Смен", Binding = new Binding("ShiftCount"), Width = 60 });
-        grid.Columns.Add(new DataGridTextColumn { Header = "Когда закрыли", Binding = new Binding("ClosedAt"), Width = 145 });
+        grid.Columns.Add(TextColumn("Смен", "ShiftCount", 60));
+        grid.Columns.Add(TextColumn("Когда закрыли", "ClosedAt", 145));
         grid.Columns.Add(MoneyColumn("Разница", "Difference", 110));
-        grid.Columns.Add(new DataGridTextColumn { Header = "Статус", Binding = new Binding("Status"), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
+        grid.Columns.Add(TextColumn("Статус", "Status", new DataGridLength(2, DataGridLengthUnitType.Star)));
+
+        var factory = new FrameworkElementFactory(typeof(CheckBox));
+        factory.SetBinding(CheckBox.IsCheckedProperty, new Binding("CashFromSber") { Mode = BindingMode.OneWay });
+        factory.SetBinding(CheckBox.IsEnabledProperty, new Binding("CanCopySber") { Mode = BindingMode.OneWay });
+        factory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        factory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        factory.SetValue(FrameworkElement.ToolTipProperty, "Поставить сумму терминалов Сбер в кассу за этот день. Галочка не создаёт фискальный чек.");
+        factory.AddHandler(CheckBox.ClickEvent, new RoutedEventHandler((sender, _) =>
+        {
+            if (sender is CheckBox checkBox && checkBox.DataContext is DaySummaryRow row)
+                toggleSberCopy(row, checkBox.IsChecked == true);
+        }));
+        grid.Columns.Add(new DataGridTemplateColumn
+        {
+            Header = "В кассу",
+            CellTemplate = new DataTemplate { VisualTree = factory },
+            Width = 75
+        });
         return grid;
     }
 
     private static DataGrid BuildMonthlySummaryGrid()
     {
         var grid = new DataGrid { IsReadOnly = true, AutoGenerateColumns = false, SelectionMode = DataGridSelectionMode.Single };
-        grid.Columns.Add(new DataGridTextColumn { Header = "Месяц", Binding = new Binding("Period"), Width = 175 });
-        grid.Columns.Add(new DataGridTextColumn { Header = "Точка", Binding = new Binding("Point"), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
+        grid.Columns.Add(TextColumn("Месяц", "Period", 175));
+        grid.Columns.Add(TextColumn("Точка", "Point", new DataGridLength(2, DataGridLengthUnitType.Star)));
         grid.Columns.Add(MoneyColumn("Терминалы Сбер", "Sber", 130));
-        grid.Columns.Add(MoneyColumn("Касса безнал", "FiscalElectronic", 125));
+        grid.Columns.Add(MoneyColumn("Касса безнал", "CashElectronic", 125));
         grid.Columns.Add(MoneyColumn("Закрыто сменами", "ShiftTotal", 140));
-        grid.Columns.Add(new DataGridTextColumn { Header = "Смен", Binding = new Binding("ShiftCount"), Width = 60 });
-        grid.Columns.Add(new DataGridTextColumn { Header = "Последнее закрытие", Binding = new Binding("ClosedAt"), Width = 155 });
+        grid.Columns.Add(TextColumn("Смен", "ShiftCount", 60));
+        grid.Columns.Add(TextColumn("Последнее закрытие", "ClosedAt", 155));
         grid.Columns.Add(MoneyColumn("Разница", "Difference", 110));
-        grid.Columns.Add(new DataGridTextColumn { Header = "Статус", Binding = new Binding("Status"), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
+        grid.Columns.Add(TextColumn("Статус", "Status", new DataGridLength(2, DataGridLengthUnitType.Star)));
         return grid;
     }
+
+    private static DataGridTextColumn TextColumn(string header, string property, double width) =>
+        TextColumn(header, property, new DataGridLength(width));
+
+    private static DataGridTextColumn TextColumn(string header, string property, DataGridLength width) => new()
+    {
+        Header = header,
+        Binding = new Binding(property),
+        Width = width,
+        IsReadOnly = true
+    };
 
     private static DataGridTextColumn MoneyColumn(string header, string property, double width) => new()
     {
         Header = header,
         Binding = new Binding(property) { StringFormat = "N2", TargetNullValue = "—" },
-        Width = width
+        Width = width,
+        IsReadOnly = true
     };
 
-    private static DaySummaryRow ToDayRow(PointDaySummary row)
+    private static DaySummaryRow ToDayRow(
+        PointDaySummary row,
+        IReadOnlyDictionary<(Guid OrganizationId, Guid LocationId, DateOnly Date), decimal> manual)
     {
-        var difference = row.BankElectronic is not null && row.FiscalElectronic is not null
-            ? row.FiscalElectronic - row.BankElectronic
+        var hasManual = manual.TryGetValue((row.OrganizationId, row.LocationId, row.Date), out var manualElectronic);
+        var hasActualFiscal = row.FiscalElectronic is not null;
+        var cashElectronic = row.FiscalElectronic ?? (hasManual ? manualElectronic : null);
+        var copiedFromSber = !hasActualFiscal && hasManual;
+        var difference = row.BankElectronic is not null && cashElectronic is not null
+            ? cashElectronic - row.BankElectronic
             : null;
+
         return new DaySummaryRow(
             row.Date, row.OrganizationId, row.LocationId, row.Organization, row.Location,
-            row.BankElectronic, row.FiscalElectronic, row.ShiftTotal, row.ShiftCount, row.LastShiftClosedAt,
-            difference, SummaryStatus(row.BankElectronic, row.FiscalElectronic, row.ShiftTotal, row.ShiftCount, difference));
+            row.BankElectronic, cashElectronic, hasActualFiscal, copiedFromSber,
+            row.BankElectronic is not null && !hasActualFiscal,
+            row.ShiftTotal, row.ShiftCount, row.LastShiftClosedAt,
+            difference, SummaryStatus(row.BankElectronic, cashElectronic, row.ShiftTotal, row.ShiftCount, difference, copiedFromSber));
     }
 
-    private static string SummaryStatus(decimal? bank, decimal? fiscal, decimal? shiftTotal, int shiftCount, decimal? difference)
+    private static string SummaryStatus(decimal? bank, decimal? cash, decimal? shiftTotal, int shiftCount, decimal? difference, bool manualCash)
     {
-        if (bank is not null && fiscal is null && shiftCount == 0) return "Сбер загружен, кассы нет";
-        if (bank is null && (fiscal is not null || shiftCount > 0)) return "Касса есть, Сбера нет";
-        if (bank is not null && fiscal is not null)
-            return difference == 0m ? "Сошлось" : "Есть расхождение";
+        if (bank is not null && cash is null && shiftCount == 0) return "Сбер загружен, кассы нет";
+        if (bank is null && (cash is not null || shiftCount > 0)) return "Касса есть, Сбера нет";
+        if (bank is not null && cash is not null)
+        {
+            if (difference == 0m) return manualCash ? "Сошлось — внесено из Сбера" : "Сошлось";
+            return "Есть расхождение";
+        }
         if (shiftCount > 0 || shiftTotal is not null) return "Есть закрытие смены";
         return "Нет данных";
     }
