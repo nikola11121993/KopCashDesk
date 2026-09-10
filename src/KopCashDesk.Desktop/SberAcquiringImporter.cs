@@ -14,6 +14,7 @@ public sealed class SberImportSummary
 {
     public int FilesProcessed { get; internal set; }
     public int FilesFailed { get; internal set; }
+    public int SheetsProcessed { get; internal set; }
     public int RowsRead { get; internal set; }
     public int OperationsAdded { get; internal set; }
     public int DuplicatesIgnored { get; internal set; }
@@ -26,6 +27,7 @@ public sealed class SberImportSummary
     public string ToDisplayText()
     {
         var text = $"Файлов обработано: {FilesProcessed}\n" +
+                   $"Листов обработано: {SheetsProcessed}\n" +
                    $"Операций добавлено: {OperationsAdded}\n" +
                    $"Дублей пропущено: {DuplicatesIgnored}\n" +
                    $"Организаций создано: {OrganizationsCreated}\n" +
@@ -70,7 +72,7 @@ public sealed class SberAcquiringImporter
             }
         }
 
-        _database.Audit("sber.import", $"files={summary.FilesProcessed}; rows={summary.RowsRead}; added={summary.OperationsAdded}; duplicates={summary.DuplicatesIgnored}; skipped={summary.RowsSkipped}; failed={summary.FilesFailed}");
+        _database.Audit("sber.import", $"files={summary.FilesProcessed}; sheets={summary.SheetsProcessed}; rows={summary.RowsRead}; added={summary.OperationsAdded}; duplicates={summary.DuplicatesIgnored}; skipped={summary.RowsSkipped}; failed={summary.FilesFailed}");
         return summary;
     }
 
@@ -116,28 +118,53 @@ public sealed class SberAcquiringImporter
     {
         using var document = SpreadsheetDocument.Open(stream, false);
         var workbookPart = document.WorkbookPart ?? throw new InvalidDataException("В XLSX отсутствует книга.");
-        var sheet = workbookPart.Workbook.Sheets?.Elements<Sheet>().FirstOrDefault() ?? throw new InvalidDataException("В XLSX нет листов.");
-        var relationshipId = sheet.Id?.Value ?? throw new InvalidDataException("Не удалось открыть лист XLSX.");
-        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(relationshipId);
-        var sheetData = worksheetPart.Worksheet.GetFirstChild<SheetData>() ?? throw new InvalidDataException("В XLSX нет строк данных.");
+        var sheets = workbookPart.Workbook.Sheets?.Elements<Sheet>().ToArray() ?? [];
+        if (sheets.Length == 0) throw new InvalidDataException("В XLSX нет листов.");
+
         var sharedStrings = workbookPart.SharedStringTablePart?.SharedStringTable.Elements<SharedStringItem>().Select(x => x.InnerText).ToArray() ?? [];
-        var rows = sheetData.Elements<Row>().ToList();
-        if (rows.Count == 0) throw new InvalidDataException("XLSX не содержит данных.");
+        var compatibleSheets = 0;
 
-        var headerRowIndex = -1;
-        Dictionary<int, string>? headers = null;
-        for (var i = 0; i < Math.Min(rows.Count, 20); i++)
+        foreach (var sheet in sheets)
         {
-            var candidate = ReadHeader(rows[i], sharedStrings);
-            if (HasRequiredHeaders(candidate.Values))
-            {
-                headers = candidate;
-                headerRowIndex = i;
-                break;
-            }
-        }
-        if (headers is null) throw new InvalidDataException("Это не общий отчёт Сбер по эквайрингу: не найдены обязательные колонки.");
+            var relationshipId = sheet.Id?.Value;
+            if (string.IsNullOrWhiteSpace(relationshipId)) continue;
+            if (workbookPart.GetPartById(relationshipId) is not WorksheetPart worksheetPart) continue;
+            var sheetData = worksheetPart.Worksheet.GetFirstChild<SheetData>();
+            if (sheetData is null) continue;
+            var rows = sheetData.Elements<Row>().ToList();
+            if (rows.Count == 0) continue;
 
+            var headerRowIndex = -1;
+            Dictionary<int, string>? headers = null;
+            for (var i = 0; i < Math.Min(rows.Count, 30); i++)
+            {
+                var candidate = ReadHeader(rows[i], sharedStrings);
+                if (HasRequiredHeaders(candidate.Values))
+                {
+                    headers = candidate;
+                    headerRowIndex = i;
+                    break;
+                }
+            }
+
+            if (headers is null) continue;
+            compatibleSheets++;
+            summary.SheetsProcessed++;
+            ImportRows(rows, headerRowIndex, headers, sharedStrings, documentId, summary);
+        }
+
+        if (compatibleSheets == 0)
+            throw new InvalidDataException("Это не общий отчёт Сбер по эквайрингу: ни на одном листе не найдены обязательные колонки.");
+    }
+
+    private void ImportRows(
+        IReadOnlyList<Row> rows,
+        int headerRowIndex,
+        Dictionary<int, string> headers,
+        string[] sharedStrings,
+        string documentId,
+        SberImportSummary summary)
+    {
         for (var i = headerRowIndex + 1; i < rows.Count; i++)
         {
             var values = ReadRow(rows[i], headers, sharedStrings);
