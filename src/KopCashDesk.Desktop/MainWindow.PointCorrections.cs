@@ -1,3 +1,4 @@
+using KopCashDesk.Data;
 using System.Windows;
 using System.Windows.Controls;
 
