@@ -4,6 +4,7 @@
       <MenuItem Header="_Файл">
         <MenuItem Header="Импорт архивов Сбер..." Click="SberImport_Click"/>
         <MenuItem Header="Импорт кассовых отчётов Такском..." Click="TaxcomShiftImport_Click"/>
+        <MenuItem Header="Импорт Frontol 6 report.txt..." Click="FrontolReportImport_Click"/>
         <Separator/>
         <MenuItem Header="Создать организацию..." Click="NewOrganization_Click"/>
         <MenuItem Header="Резервная копия..." Click="Backup_Click"/>
@@ -20,6 +21,7 @@
       <MenuItem Header="_Сервис">
         <MenuItem Header="Импорт архивов Сбер..." Click="SberImport_Click"/>
         <MenuItem Header="Импорт кассовых отчётов Такском..." Click="TaxcomShiftImport_Click"/>
+        <MenuItem Header="Импорт Frontol 6 report.txt..." Click="FrontolReportImport_Click"/>
         <Separator/>
         <MenuItem Header="Интеграции" Click="Integrations_Click"/>
         <MenuItem Header="Такском — логин и пароль..." Click="TaxcomSettings_Click"/>
@@ -50,7 +52,7 @@
       <Separator/>
       <StatusBarItem><TextBlock x:Name="DatabaseText"/></StatusBarItem>
       <Separator/>
-      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.5"/></StatusBarItem>
+      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.6"/></StatusBarItem>
     </StatusBar>
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="225"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -68,6 +70,7 @@
           <Separator Margin="4,12"/>
           <Button Content="Сбер — импорт архивов" Click="SberImport_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Такском — импорт смен" Click="TaxcomShiftImport_Click" HorizontalContentAlignment="Left"/>
+          <Button Content="Frontol 6 — импорт report.txt" Click="FrontolReportImport_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Интеграции" Tag="integrations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Такском — настройки" Click="TaxcomSettings_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Настройки" Tag="settings" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
