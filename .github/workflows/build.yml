@@ -76,12 +76,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v0.4.6-preview'
+          $tag = 'v0.4.7-preview'
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $notes = "Предварительная версия 0.4.6. Добавлен прямой импорт полной выгрузки Frontol 6 report.txt: закрытые смены, наличные и безнал, исключение отменённых чеков, защита от дублей и потоковая обработка больших файлов. Commit: $env:GITHUB_SHA"
+          $notes = "Предварительная версия 0.4.7. Исправлена кнопка сверки: теперь она открывает рабочий свод касса ↔ терминал с суммами безнала, разницей и статусом по дням и месяцам. Сохраняется импорт Frontol 6 report.txt из 0.4.6. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --title 'КОП Кассы 0.4.6 — импорт Frontol 6' --notes $notes --prerelease --target $env:GITHUB_SHA
+            gh release create $tag $asset --title 'КОП Кассы 0.4.7 — рабочая сверка касса ↔ терминал' --notes $notes --prerelease --target $env:GITHUB_SHA
           } else {
             gh release upload $tag $asset --clobber
             if ($LASTEXITCODE -eq 0) { gh release edit $tag --notes $notes --target $env:GITHUB_SHA }

@@ -52,7 +52,7 @@
       <Separator/>
       <StatusBarItem><TextBlock x:Name="DatabaseText"/></StatusBarItem>
       <Separator/>
-      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.6"/></StatusBarItem>
+      <StatusBarItem HorizontalAlignment="Right"><TextBlock Text="v0.4.7"/></StatusBarItem>
     </StatusBar>
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="225"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -66,7 +66,7 @@
           <Button Content="Объединить точки" Click="MergeLocations_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Свод по точкам" Click="Summary_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Операции" Tag="operations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
-          <Button Content="Сверка" Tag="reconciliation" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
+          <Button Content="Сверка касса ↔ терминал" Click="Summary_Click" HorizontalContentAlignment="Left"/>
           <Separator Margin="4,12"/>
           <Button Content="Сбер — импорт архивов" Click="SberImport_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Такском — импорт смен" Click="TaxcomShiftImport_Click" HorizontalContentAlignment="Left"/>
