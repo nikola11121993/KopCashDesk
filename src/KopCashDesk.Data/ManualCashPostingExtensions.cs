@@ -81,6 +81,7 @@ public static class ManualCashPostingExtensions
         database.EnsureManualCashPostings();
         using var db = Open(database);
         using var transaction = db.BeginTransaction();
+        var old = ReadAmount(db, transaction, organizationId, locationId, date);
         var now = DateTimeOffset.UtcNow.ToString("O");
         electronic = Money.Normalize(electronic);
 
@@ -103,7 +104,7 @@ public static class ManualCashPostingExtensions
         }
 
         Audit(db, transaction, "manual_cash.set",
-            $"org={organizationId}; loc={locationId}; date={date:yyyy-MM-dd}; amount={electronic:0.00}");
+            $"org={organizationId}; loc={locationId}; date={date:yyyy-MM-dd}; old={MoneyText(old)}; new={electronic:0.00}");
         transaction.Commit();
     }
 
@@ -124,6 +125,7 @@ public static class ManualCashPostingExtensions
         database.EnsureManualCashPostings();
         using var db = Open(database);
         using var transaction = db.BeginTransaction();
+        var old = ReadAmount(db, transaction, organizationId, locationId, date);
 
         using (var command = db.CreateCommand())
         {
@@ -136,7 +138,7 @@ public static class ManualCashPostingExtensions
         }
 
         Audit(db, transaction, "manual_cash.clear",
-            $"org={organizationId}; loc={locationId}; date={date:yyyy-MM-dd}");
+            $"org={organizationId}; loc={locationId}; date={date:yyyy-MM-dd}; old={MoneyText(old)}; new=<none>");
         transaction.Commit();
     }
 
@@ -146,6 +148,20 @@ public static class ManualCashPostingExtensions
         Guid locationId,
         DateOnly date) =>
         database.ClearManualCash(organizationId, locationId, date);
+
+    private static decimal? ReadAmount(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, DateOnly date)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = "SELECT electronic_kopecks FROM manual_cash_postings WHERE organization_id=$org AND location_id=$loc AND business_date=$date";
+        command.Parameters.AddWithValue("$org", organizationId.ToString());
+        command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$date", date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        var value = command.ExecuteScalar();
+        return value is null || value is DBNull ? null : Money.FromKopecks(Convert.ToInt64(value));
+    }
+
+    private static string MoneyText(decimal? value) => value is null ? "<none>" : value.Value.ToString("0.00", CultureInfo.InvariantCulture);
 
     private static SqliteConnection Open(Database database)
     {
