@@ -25,35 +25,30 @@ public sealed class Database
     public void Initialize()
     {
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
-        using var db = Open();
-        using var command = db.CreateCommand();
-        command.CommandText = """
-            PRAGMA journal_mode=WAL;
-            PRAGMA foreign_keys=ON;
-            CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL);
-            INSERT INTO schema_version(version) SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM schema_version);
-            CREATE TABLE IF NOT EXISTS organizations(id TEXT PRIMARY KEY, name TEXT NOT NULL, tax_id TEXT NOT NULL DEFAULT '');
-            CREATE TABLE IF NOT EXISTS locations(id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), name TEXT NOT NULL, address TEXT NOT NULL DEFAULT '', excluded INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE IF NOT EXISTS register_bindings(id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), location_id TEXT NOT NULL REFERENCES locations(id), fn TEXT NOT NULL, register_number TEXT NOT NULL DEFAULT '', UNIQUE(organization_id, fn));
-            CREATE TABLE IF NOT EXISTS terminal_bindings(id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), location_id TEXT NOT NULL REFERENCES locations(id), provider TEXT NOT NULL, tid TEXT NOT NULL, mid TEXT NOT NULL DEFAULT '', payment_method TEXT NOT NULL DEFAULT 'POS', UNIQUE(organization_id, provider,tid));
-            CREATE TABLE IF NOT EXISTS integrations(id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), kind TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE IF NOT EXISTS source_documents(id TEXT PRIMARY KEY, source TEXT NOT NULL, external_id TEXT NOT NULL, sha256 TEXT NOT NULL, imported_at TEXT NOT NULL, original_name TEXT NOT NULL, UNIQUE(source, external_id));
-            CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, source TEXT NOT NULL, external_id TEXT NOT NULL, organization_id TEXT NOT NULL REFERENCES organizations(id), location_id TEXT REFERENCES locations(id), occurred_at TEXT NOT NULL, source_kind TEXT NOT NULL, kind TEXT NOT NULL, payment TEXT NOT NULL, amount_kopecks INTEGER NOT NULL, document_id TEXT REFERENCES source_documents(id), UNIQUE(source, external_id));
-            CREATE TABLE IF NOT EXISTS shift_closures(id TEXT PRIMARY KEY, source TEXT NOT NULL, external_id TEXT NOT NULL, organization_id TEXT NOT NULL REFERENCES organizations(id), location_id TEXT NOT NULL REFERENCES locations(id), closed_at TEXT NOT NULL, total_kopecks INTEGER NOT NULL, cash_kopecks INTEGER NOT NULL, electronic_kopecks INTEGER NOT NULL, fn TEXT NOT NULL DEFAULT '', shift_number INTEGER, document_id TEXT REFERENCES source_documents(id), UNIQUE(source, external_id));
-            CREATE INDEX IF NOT EXISTS ix_operations_summary ON operations(organization_id, location_id, occurred_at, source_kind, payment);
-            CREATE INDEX IF NOT EXISTS ix_shift_closures_summary ON shift_closures(organization_id, location_id, closed_at);
-            CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at TEXT NOT NULL, action TEXT NOT NULL, details TEXT NOT NULL);
-            """;
-        command.ExecuteNonQuery();
-        if (GetVersion(db) != 1)
-            throw new InvalidOperationException("Версия базы данных новее этой программы. Обновите программу.");
-    }
+        using (var db = Open())
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText = """
+                PRAGMA journal_mode=WAL;
+                PRAGMA foreign_keys=ON;
+                CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL);
+                INSERT INTO schema_version(version) SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM schema_version);
+                CREATE TABLE IF NOT EXISTS organizations(id TEXT PRIMARY KEY, name TEXT NOT NULL, tax_id TEXT NOT NULL DEFAULT '');
+                CREATE TABLE IF NOT EXISTS locations(id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), name TEXT NOT NULL, address TEXT NOT NULL DEFAULT '', excluded INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS register_bindings(id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), location_id TEXT NOT NULL REFERENCES locations(id), fn TEXT NOT NULL, register_number TEXT NOT NULL DEFAULT '', UNIQUE(organization_id, fn));
+                CREATE TABLE IF NOT EXISTS terminal_bindings(id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), location_id TEXT NOT NULL REFERENCES locations(id), provider TEXT NOT NULL, tid TEXT NOT NULL, mid TEXT NOT NULL DEFAULT '', payment_method TEXT NOT NULL DEFAULT 'POS', UNIQUE(organization_id, provider,tid));
+                CREATE TABLE IF NOT EXISTS integrations(id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), kind TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS source_documents(id TEXT PRIMARY KEY, source TEXT NOT NULL, external_id TEXT NOT NULL, sha256 TEXT NOT NULL, imported_at TEXT NOT NULL, original_name TEXT NOT NULL, UNIQUE(source, external_id));
+                CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, source TEXT NOT NULL, external_id TEXT NOT NULL, organization_id TEXT NOT NULL REFERENCES organizations(id), location_id TEXT REFERENCES locations(id), occurred_at TEXT NOT NULL, source_kind TEXT NOT NULL, kind TEXT NOT NULL, payment TEXT NOT NULL, amount_kopecks INTEGER NOT NULL, document_id TEXT REFERENCES source_documents(id), UNIQUE(source, external_id));
+                CREATE TABLE IF NOT EXISTS shift_closures(id TEXT PRIMARY KEY, source TEXT NOT NULL, external_id TEXT NOT NULL, organization_id TEXT NOT NULL REFERENCES organizations(id), location_id TEXT NOT NULL REFERENCES locations(id), closed_at TEXT NOT NULL, total_kopecks INTEGER NOT NULL, cash_kopecks INTEGER NOT NULL, electronic_kopecks INTEGER NOT NULL, fn TEXT NOT NULL DEFAULT '', shift_number INTEGER, document_id TEXT REFERENCES source_documents(id), UNIQUE(source, external_id));
+                CREATE INDEX IF NOT EXISTS ix_operations_summary ON operations(organization_id, location_id, occurred_at, source_kind, payment);
+                CREATE INDEX IF NOT EXISTS ix_shift_closures_summary ON shift_closures(organization_id, location_id, closed_at);
+                CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at TEXT NOT NULL, action TEXT NOT NULL, details TEXT NOT NULL);
+                """;
+            command.ExecuteNonQuery();
+        }
 
-    private static long GetVersion(SqliteConnection db)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
-        return (long)cmd.ExecuteScalar()!;
+        DatabaseMigrations.Apply(this);
     }
 
     private static void Execute(SqliteConnection db, string sql, params (string Name, object? Value)[] args)
@@ -76,14 +71,30 @@ public sealed class Database
         return result;
     }
 
-    public IReadOnlyList<Location> Locations()
+    public IReadOnlyList<Location> Locations(bool includeInactive = false)
     {
         using var db = Open();
         using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT id,organization_id,name,address,excluded FROM locations ORDER BY name";
+        cmd.CommandText = """
+            SELECT id,organization_id,name,address,excluded,is_active,merged_into_location_id
+            FROM locations
+            WHERE $all=1 OR is_active=1
+            ORDER BY name
+            """;
+        cmd.Parameters.AddWithValue("$all", includeInactive ? 1 : 0);
         using var r = cmd.ExecuteReader();
         var result = new List<Location>();
-        while (r.Read()) result.Add(new(Guid.Parse(r.GetString(0)), Guid.Parse(r.GetString(1)), r.GetString(2), r.GetString(3), r.GetInt64(4) != 0));
+        while (r.Read())
+        {
+            result.Add(new(
+                Guid.Parse(r.GetString(0)),
+                Guid.Parse(r.GetString(1)),
+                r.GetString(2),
+                r.GetString(3),
+                r.GetInt64(4) != 0,
+                r.GetInt64(5) != 0,
+                r.IsDBNull(6) ? null : Guid.Parse(r.GetString(6))));
+        }
         return result;
     }
 
@@ -91,44 +102,119 @@ public sealed class Database
     {
         using var db = Open();
         using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT id,organization_id,location_id,provider,tid,mid,payment_method FROM terminal_bindings ORDER BY provider,tid";
+        cmd.CommandText = """
+            SELECT id,organization_id,location_id,provider,tid,mid,payment_method,binding_source,is_locked,valid_from,valid_to
+            FROM terminal_bindings
+            ORDER BY provider,tid
+            """;
         using var r = cmd.ExecuteReader();
         var result = new List<TerminalBinding>();
         while (r.Read())
-            result.Add(new(Guid.Parse(r.GetString(0)), Guid.Parse(r.GetString(1)), Guid.Parse(r.GetString(2)), r.GetString(3), r.GetString(4), r.GetString(5), r.GetString(6)));
+        {
+            result.Add(new(
+                Guid.Parse(r.GetString(0)),
+                Guid.Parse(r.GetString(1)),
+                Guid.Parse(r.GetString(2)),
+                r.GetString(3),
+                r.GetString(4),
+                r.GetString(5),
+                r.GetString(6),
+                ParseBindingSource(r.GetString(7)),
+                r.GetInt64(8) != 0,
+                r.IsDBNull(9) ? null : DateOnly.ParseExact(r.GetString(9), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                r.IsDBNull(10) ? null : DateOnly.ParseExact(r.GetString(10), "yyyy-MM-dd", CultureInfo.InvariantCulture))));
+        }
         return result;
     }
 
     public void Save(Organization x)
     {
+        var taxId = DigitsOnly(x.TaxId);
         using var db = Open();
         Execute(db,
             "INSERT INTO organizations(id,name,tax_id) VALUES($id,$n,$t) ON CONFLICT(id) DO UPDATE SET name=excluded.name,tax_id=excluded.tax_id",
-            ("$id", x.Id.ToString()), ("$n", x.Name.Trim()), ("$t", x.TaxId.Trim()));
+            ("$id", x.Id.ToString()), ("$n", x.Name.Trim()), ("$t", taxId));
     }
 
     public void Save(Location x)
     {
         using var db = Open();
         Execute(db,
-            "INSERT INTO locations(id,organization_id,name,address,excluded) VALUES($id,$o,$n,$a,$e) ON CONFLICT(id) DO UPDATE SET name=excluded.name,address=excluded.address,excluded=excluded.excluded",
-            ("$id", x.Id.ToString()), ("$o", x.OrganizationId.ToString()), ("$n", x.Name.Trim()), ("$a", x.Address.Trim()), ("$e", x.IsExcluded ? 1 : 0));
+            """
+            INSERT INTO locations(id,organization_id,name,address,excluded,is_active,merged_into_location_id)
+            VALUES($id,$o,$n,$a,$e,$active,$merged)
+            ON CONFLICT(id) DO UPDATE SET
+                organization_id=excluded.organization_id,
+                name=excluded.name,
+                address=excluded.address,
+                excluded=excluded.excluded,
+                is_active=excluded.is_active,
+                merged_into_location_id=excluded.merged_into_location_id
+            """,
+            ("$id", x.Id.ToString()), ("$o", x.OrganizationId.ToString()), ("$n", x.Name.Trim()),
+            ("$a", x.Address.Trim()), ("$e", x.IsExcluded ? 1 : 0), ("$active", x.IsActive ? 1 : 0),
+            ("$merged", x.MergedIntoLocationId?.ToString()));
     }
 
     public void Save(TerminalBinding x)
     {
         using var db = Open();
-        Execute(db,
-            """
-            INSERT INTO terminal_bindings(id,organization_id,location_id,provider,tid,mid,payment_method)
-            VALUES($id,$o,$l,$p,$tid,$mid,$pm)
-            ON CONFLICT(organization_id,provider,tid) DO UPDATE SET
-                location_id=excluded.location_id,
-                mid=excluded.mid,
-                payment_method=excluded.payment_method
-            """,
-            ("$id", x.Id.ToString()), ("$o", x.OrganizationId.ToString()), ("$l", x.LocationId.ToString()),
-            ("$p", x.Provider.Trim()), ("$tid", x.TerminalId.Trim()), ("$mid", x.MerchantId.Trim()), ("$pm", x.PaymentMethod.Trim()));
+        using var transaction = db.BeginTransaction();
+
+        TerminalBinding? existing = null;
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = transaction;
+            read.CommandText = """
+                SELECT id,organization_id,location_id,provider,tid,mid,payment_method,binding_source,is_locked,valid_from,valid_to
+                FROM terminal_bindings
+                WHERE organization_id=$org AND provider=$provider AND tid=$tid
+                LIMIT 1
+                """;
+            read.Parameters.AddWithValue("$org", x.OrganizationId.ToString());
+            read.Parameters.AddWithValue("$provider", x.Provider.Trim());
+            read.Parameters.AddWithValue("$tid", x.TerminalId.Trim());
+            using var reader = read.ExecuteReader();
+            if (reader.Read()) existing = ReadTerminalBinding(reader);
+        }
+
+        if (existing is not null &&
+            (existing.IsLocked && x.BindingSource != BindingSource.Manual || BindingRank(existing.BindingSource) > BindingRank(x.BindingSource)))
+        {
+            transaction.Rollback();
+            return;
+        }
+
+        using (var command = db.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO terminal_bindings(id,organization_id,location_id,provider,tid,mid,payment_method,binding_source,is_locked,valid_from,valid_to)
+                VALUES($id,$org,$loc,$provider,$tid,$mid,$method,$source,$locked,$from,$to)
+                ON CONFLICT(organization_id,provider,tid) DO UPDATE SET
+                    location_id=excluded.location_id,
+                    mid=excluded.mid,
+                    payment_method=excluded.payment_method,
+                    binding_source=excluded.binding_source,
+                    is_locked=excluded.is_locked,
+                    valid_from=excluded.valid_from,
+                    valid_to=excluded.valid_to
+                """;
+            command.Parameters.AddWithValue("$id", existing?.Id.ToString() ?? x.Id.ToString());
+            command.Parameters.AddWithValue("$org", x.OrganizationId.ToString());
+            command.Parameters.AddWithValue("$loc", x.LocationId.ToString());
+            command.Parameters.AddWithValue("$provider", x.Provider.Trim());
+            command.Parameters.AddWithValue("$tid", x.TerminalId.Trim());
+            command.Parameters.AddWithValue("$mid", x.MerchantId.Trim());
+            command.Parameters.AddWithValue("$method", string.IsNullOrWhiteSpace(x.PaymentMethod) ? "POS" : x.PaymentMethod.Trim());
+            command.Parameters.AddWithValue("$source", x.BindingSource.ToString());
+            command.Parameters.AddWithValue("$locked", x.IsLocked ? 1 : 0);
+            command.Parameters.AddWithValue("$from", x.ValidFrom is null ? DBNull.Value : x.ValidFrom.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            command.Parameters.AddWithValue("$to", x.ValidTo is null ? DBNull.Value : x.ValidTo.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
     }
 
     public void Save(ShiftClosure x)
@@ -256,10 +342,16 @@ public sealed class Database
                 FROM shift_closures
                 GROUP BY substr(closed_at,1,10), organization_id, location_id
             ),
+            manual AS (
+                SELECT business_date AS day,organization_id,location_id
+                FROM manual_cash_postings
+            ),
             keys AS (
                 SELECT day,organization_id,location_id FROM op WHERE bank_count>0 OR fiscal_count>0
                 UNION
                 SELECT day,organization_id,location_id FROM shifts
+                UNION
+                SELECT day,organization_id,location_id FROM manual
             )
             SELECT
                 k.day,
@@ -396,4 +488,29 @@ public sealed class Database
         target.Open();
         source.BackupDatabase(target);
     }
+
+    private static TerminalBinding ReadTerminalBinding(SqliteDataReader r) => new(
+        Guid.Parse(r.GetString(0)),
+        Guid.Parse(r.GetString(1)),
+        Guid.Parse(r.GetString(2)),
+        r.GetString(3),
+        r.GetString(4),
+        r.GetString(5),
+        r.GetString(6),
+        ParseBindingSource(r.GetString(7)),
+        r.GetInt64(8) != 0,
+        r.IsDBNull(9) ? null : DateOnly.ParseExact(r.GetString(9), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+        r.IsDBNull(10) ? null : DateOnly.ParseExact(r.GetString(10), "yyyy-MM-dd", CultureInfo.InvariantCulture));
+
+    private static BindingSource ParseBindingSource(string value) =>
+        Enum.TryParse<BindingSource>(value, true, out var source) ? source : BindingSource.Automatic;
+
+    private static int BindingRank(BindingSource source) => source switch
+    {
+        BindingSource.Manual => 3,
+        BindingSource.Rule => 2,
+        _ => 1
+    };
+
+    private static string DigitsOnly(string value) => new(value.Where(char.IsDigit).ToArray());
 }
