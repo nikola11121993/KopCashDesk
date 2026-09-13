@@ -22,23 +22,47 @@ public static class LocationMergeExtensions
         var source = ReadLocation(db, transaction, sourceLocationId);
         var target = ReadLocation(db, transaction, targetLocationId);
         if (source is null || target is null) return false;
+        if (!source.Value.IsActive) return false;
+        if (!target.Value.IsActive) throw new InvalidOperationException("Нельзя объединять в неактивную точку.");
         if (source.Value.OrganizationId != target.Value.OrganizationId)
             throw new InvalidOperationException("Нельзя объединять точки разных организаций.");
 
         EnsureManualCashCanMerge(db, transaction, sourceLocationId, targetLocationId);
-        MoveManualCashPostings(db, transaction, sourceLocationId, targetLocationId);
 
+        var operationCount = CountReferences(db, transaction, "operations", sourceLocationId);
+        var shiftCount = CountReferences(db, transaction, "shift_closures", sourceLocationId);
+        var registerCount = CountReferences(db, transaction, "register_bindings", sourceLocationId);
+        var terminalCount = CountReferences(db, transaction, "terminal_bindings", sourceLocationId);
+        var manualCount = CountReferences(db, transaction, "manual_cash_postings", sourceLocationId);
+        var allocationCount = CountReferences(db, transaction, "reconciliation_allocations", sourceLocationId) +
+                              CountReferences(db, transaction, "reconciliation_allocations", targetLocationId);
+
+        MoveManualCashPostings(db, transaction, sourceLocationId, targetLocationId);
         UpdateLocationReference(db, transaction, "operations", sourceLocationId, targetLocationId);
         UpdateLocationReference(db, transaction, "shift_closures", sourceLocationId, targetLocationId);
         UpdateLocationReference(db, transaction, "register_bindings", sourceLocationId, targetLocationId);
         UpdateLocationReference(db, transaction, "terminal_bindings", sourceLocationId, targetLocationId);
 
-        using (var delete = db.CreateCommand())
+        using (var allocations = db.CreateCommand())
         {
-            delete.Transaction = transaction;
-            delete.CommandText = "DELETE FROM locations WHERE id=$source";
-            delete.Parameters.AddWithValue("$source", sourceLocationId.ToString());
-            delete.ExecuteNonQuery();
+            allocations.Transaction = transaction;
+            allocations.CommandText = "DELETE FROM reconciliation_allocations WHERE location_id=$source OR location_id=$target";
+            allocations.Parameters.AddWithValue("$source", sourceLocationId.ToString());
+            allocations.Parameters.AddWithValue("$target", targetLocationId.ToString());
+            allocations.ExecuteNonQuery();
+        }
+
+        using (var mark = db.CreateCommand())
+        {
+            mark.Transaction = transaction;
+            mark.CommandText = """
+                UPDATE locations
+                SET is_active=0, merged_into_location_id=$target, excluded=1
+                WHERE id=$source
+                """;
+            mark.Parameters.AddWithValue("$source", sourceLocationId.ToString());
+            mark.Parameters.AddWithValue("$target", targetLocationId.ToString());
+            mark.ExecuteNonQuery();
         }
 
         using (var audit = db.CreateCommand())
@@ -47,8 +71,10 @@ public static class LocationMergeExtensions
             audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,$a,$d)";
             audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
             audit.Parameters.AddWithValue("$a", "location.merge");
-            var details = $"{source.Value.Name} -> {target.Value.Name}";
-            if (!string.IsNullOrWhiteSpace(reason)) details += $"; {reason.Trim()}";
+            var details =
+                $"source={sourceLocationId} ({source.Value.Name}); target={targetLocationId} ({target.Value.Name}); " +
+                $"operations={operationCount}; shifts={shiftCount}; terminals={terminalCount}; registers={registerCount}; manual={manualCount}; stale_allocations_cleared={allocationCount}";
+            if (!string.IsNullOrWhiteSpace(reason)) details += $"; reason={reason.Trim()}";
             audit.Parameters.AddWithValue("$d", details);
             audit.ExecuteNonQuery();
         }
@@ -118,14 +144,23 @@ public static class LocationMergeExtensions
         delete.ExecuteNonQuery();
     }
 
-    private static (Guid OrganizationId, string Name)? ReadLocation(SqliteConnection db, SqliteTransaction transaction, Guid id)
+    private static (Guid OrganizationId, string Name, bool IsActive)? ReadLocation(SqliteConnection db, SqliteTransaction transaction, Guid id)
     {
         using var command = db.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT organization_id,name FROM locations WHERE id=$id LIMIT 1";
+        command.CommandText = "SELECT organization_id,name,is_active FROM locations WHERE id=$id LIMIT 1";
         command.Parameters.AddWithValue("$id", id.ToString());
         using var reader = command.ExecuteReader();
-        return reader.Read() ? (Guid.Parse(reader.GetString(0)), reader.GetString(1)) : null;
+        return reader.Read() ? (Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.GetInt64(2) != 0) : null;
+    }
+
+    private static int CountReferences(SqliteConnection db, SqliteTransaction transaction, string table, Guid location)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"SELECT COUNT(*) FROM {table} WHERE location_id=$location";
+        command.Parameters.AddWithValue("$location", location.ToString());
+        return Convert.ToInt32(command.ExecuteScalar());
     }
 
     private static void UpdateLocationReference(SqliteConnection db, SqliteTransaction transaction, string table, Guid source, Guid target)
