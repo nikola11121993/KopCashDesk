@@ -282,8 +282,8 @@ public static class ReconciliationExtensions
 
             var hasBank = bank is not null;
             var hasCash = cashEvents is { Length: > 0 };
-            var bankAmount = hasBank ? Money.FromKopecks(bank!.AmountKopecks) : null;
-            var cashAmount = hasCash ? Money.FromKopecks(cashEvents!.Sum(x => x.AmountKopecks)) : null;
+            decimal? bankAmount = hasBank ? Money.FromKopecks(bank!.AmountKopecks) : null;
+            decimal? cashAmount = hasCash ? Money.FromKopecks(cashEvents!.Sum(x => x.AmountKopecks)) : null;
             var closed = closedByTerminal.GetValueOrDefault(date);
             var later = closedLater.GetValueOrDefault(date);
             var rawPositiveBank = Math.Max(0, bank?.AmountKopecks ?? 0);
