@@ -36,6 +36,13 @@ public partial class MainWindow
             PageContent.Content = RenderSummary();
             return;
         }
+        if (_page == "reconciliation")
+        {
+            SearchBox.IsEnabled = false;
+            PrimaryButton.Visibility = Visibility.Collapsed;
+            PageContent.Content = RenderReconciliation();
+            return;
+        }
         if (_page == "terminals")
         {
             SearchBox.IsEnabled = false;
@@ -54,6 +61,12 @@ public partial class MainWindow
             SearchBox.IsEnabled = false;
             PrimaryButton.Visibility = Visibility.Collapsed;
             PageContent.Content = RenderSummary();
+        }
+        else if (_page == "reconciliation")
+        {
+            SearchBox.IsEnabled = false;
+            PrimaryButton.Visibility = Visibility.Collapsed;
+            PageContent.Content = RenderReconciliation();
         }
         else if (_page == "terminals")
         {
