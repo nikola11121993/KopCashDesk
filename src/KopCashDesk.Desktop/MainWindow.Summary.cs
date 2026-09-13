@@ -64,7 +64,7 @@ public partial class MainWindow
     private UIElement RenderSummary()
     {
         PageTitle.Text = "Свод по точкам";
-        PageSubtitle.Text = "Терминалы Сбер, касса и закрытия смен по дням и месяцам";
+        PageSubtitle.Text = "Фактические импортированные данные: терминалы, касса и закрытия смен";
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -181,13 +181,18 @@ public partial class MainWindow
                     var bank = SumNullable(g.Select(x => x.Sber));
                     var cash = SumNullable(g.Select(x => x.CashElectronic));
                     var shiftTotal = SumNullable(g.Select(x => x.ShiftTotal));
-                    var difference = bank is not null && cash is not null ? cash - bank : null;
+                    var missingCash = g.Any(x => x.Sber is not null && x.CashElectronic is null);
+                    var missingBank = g.Any(x => x.Sber is null && x.CashElectronic is not null);
+                    var complete = !missingCash && !missingBank;
+                    var difference = complete && bank is not null && cash is not null ? cash - bank : null;
                     var lastClosed = g.Where(x => x.LastClosedAt is not null).Select(x => x.LastClosedAt).Max();
                     var copied = g.Any(x => x.CashFromSber);
+                    var status = complete
+                        ? SummaryStatus(bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), difference, copied)
+                        : "Неполные данные";
                     return new MonthSummaryRow(
                         g.Key.Year, g.Key.Month, g.Key.OrganizationId, g.Key.LocationId, g.Key.Organization, g.Key.Point,
-                        bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), lastClosed, difference,
-                        SummaryStatus(bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), difference, copied));
+                        bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), lastClosed, difference, status);
                 })
                 .OrderByDescending(x => x.Year)
                 .ThenByDescending(x => x.Month)
@@ -198,7 +203,9 @@ public partial class MainWindow
             var bankTotal = SumNullable(dayRows.Select(x => x.Sber));
             var cashTotal = SumNullable(dayRows.Select(x => x.CashElectronic));
             var shiftGrandTotal = SumNullable(dayRows.Select(x => x.ShiftTotal));
-            totals.Text = $"Сбер за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}";
+            var incompleteDays = dayRows.Count(x => (x.Sber is null) != (x.CashElectronic is null));
+            totals.Text = $"Сбер за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
+                          (incompleteDays > 0 ? $"     •     Неполных дней: {incompleteDays}" : "");
         }
 
         yearBox.SelectionChanged += (_, _) => RefreshData();
