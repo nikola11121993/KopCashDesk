@@ -1,9 +1,41 @@
 namespace KopCashDesk.Core;
 
 public sealed record Organization(Guid Id, string Name, string TaxId = "");
-public sealed record Location(Guid Id, Guid OrganizationId, string Name, string Address = "", bool IsExcluded = false);
-public sealed record RegisterBinding(Guid Id, Guid OrganizationId, Guid LocationId, string FiscalDriveNumber, string RegisterNumber = "");
-public sealed record TerminalBinding(Guid Id, Guid OrganizationId, Guid LocationId, string Provider, string TerminalId, string MerchantId = "", string PaymentMethod = "POS");
+
+public sealed record Location(
+    Guid Id,
+    Guid OrganizationId,
+    string Name,
+    string Address = "",
+    bool IsExcluded = false,
+    bool IsActive = true,
+    Guid? MergedIntoLocationId = null);
+
+public enum BindingSource { Automatic, Rule, Manual }
+
+public sealed record RegisterBinding(
+    Guid Id,
+    Guid OrganizationId,
+    Guid LocationId,
+    string FiscalDriveNumber,
+    string RegisterNumber = "",
+    BindingSource BindingSource = BindingSource.Automatic,
+    bool IsLocked = false,
+    DateOnly? ValidFrom = null,
+    DateOnly? ValidTo = null);
+
+public sealed record TerminalBinding(
+    Guid Id,
+    Guid OrganizationId,
+    Guid LocationId,
+    string Provider,
+    string TerminalId,
+    string MerchantId = "",
+    string PaymentMethod = "POS",
+    BindingSource BindingSource = BindingSource.Automatic,
+    bool IsLocked = false,
+    DateOnly? ValidFrom = null,
+    DateOnly? ValidTo = null);
 
 public enum SourceKind { Fiscal, Bank, Manual }
 public enum OperationKind { Sale, Return, Correction, Unknown }
@@ -49,6 +81,45 @@ public sealed record PointDaySummary(
     decimal? ShiftElectronic,
     int ShiftCount,
     DateTimeOffset? LastShiftClosedAt);
+
+public enum ReconciliationAllocationKind { Cash, BankReturnCredit }
+
+public sealed record ReconciliationAllocation(
+    Guid Id,
+    Guid OrganizationId,
+    Guid LocationId,
+    DateOnly TerminalDate,
+    ReconciliationAllocationKind Kind,
+    string SettlementSource,
+    string SettlementExternalId,
+    DateOnly SettlementDate,
+    decimal Amount,
+    int AlgorithmVersion,
+    DateTimeOffset CreatedAt);
+
+public sealed record ReconciliationDay(
+    DateOnly Date,
+    Guid OrganizationId,
+    string Organization,
+    Guid LocationId,
+    string Location,
+    decimal? BankElectronic,
+    decimal? CashElectronic,
+    decimal PriorOutstanding,
+    decimal CashAppliedOnDate,
+    decimal ClosedForTerminalDay,
+    decimal ClosedLater,
+    decimal DayRemaining,
+    decimal CumulativeOutstanding,
+    decimal UnmatchedCash,
+    bool HasBankData,
+    bool HasCashData,
+    bool RequiresReview,
+    bool IsExcluded,
+    DateOnly? LastSettlementDate,
+    DateTimeOffset? LastShiftClosedAt,
+    string ShiftNumbers,
+    string Status);
 
 public sealed record Reconciliation(decimal? FiscalElectronic, decimal? BankElectronic, decimal? Difference, string Status);
 
