@@ -122,7 +122,7 @@ public sealed class Database
                 ParseBindingSource(r.GetString(7)),
                 r.GetInt64(8) != 0,
                 r.IsDBNull(9) ? null : DateOnly.ParseExact(r.GetString(9), "yyyy-MM-dd", CultureInfo.InvariantCulture),
-                r.IsDBNull(10) ? null : DateOnly.ParseExact(r.GetString(10), "yyyy-MM-dd", CultureInfo.InvariantCulture))));
+                r.IsDBNull(10) ? null : DateOnly.ParseExact(r.GetString(10), "yyyy-MM-dd", CultureInfo.InvariantCulture)));
         }
         return result;
     }
@@ -179,7 +179,7 @@ public sealed class Database
         }
 
         if (existing is not null &&
-            (existing.IsLocked && x.BindingSource != BindingSource.Manual || BindingRank(existing.BindingSource) > BindingRank(x.BindingSource)))
+            (existing.IsLocked || BindingRank(existing.BindingSource) > BindingRank(x.BindingSource)))
         {
             transaction.Rollback();
             return;
