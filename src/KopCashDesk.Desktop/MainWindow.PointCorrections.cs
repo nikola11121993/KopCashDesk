@@ -8,6 +8,7 @@ public partial class MainWindow
 {
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        VersionText.Text = AppVersion.Display;
         _db.EnsureManualCashPostings();
         var applied = KnownBusinessRules.ApplyPending(_db);
         if (applied > 0)
