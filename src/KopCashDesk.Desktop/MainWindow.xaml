@@ -31,7 +31,7 @@
       </MenuItem>
       <MenuItem Header="_Справка">
         <MenuItem Header="Руководство пользователя   F1" Click="Help_Click"/>
-        <MenuItem Header="О программе" Click="About_Click"/>
+        <MenuItem Header="О программе" Click="AboutVNext_Click"/>
       </MenuItem>
     </Menu>
     <Border DockPanel.Dock="Top" Background="White" BorderBrush="#DCE2E9" BorderThickness="0,0,0,1" Padding="20,12">
