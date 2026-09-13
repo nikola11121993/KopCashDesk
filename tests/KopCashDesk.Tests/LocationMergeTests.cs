@@ -7,7 +7,7 @@ namespace KopCashDesk.Tests;
 public sealed class LocationMergeTests
 {
     [Fact]
-    public void MergeLocations_MovesOperationsTerminalsShiftsAndManualCashToTarget()
+    public void MergeLocations_MovesReferencesAndPreservesInactiveSourceHistory()
     {
         var root = Path.Combine(Path.GetTempPath(), "KopCashDesk.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -33,12 +33,19 @@ public sealed class LocationMergeTests
 
         Assert.True(merged);
         Assert.DoesNotContain(db.Locations(), x => x.Id == source.Id);
+        var archivedSource = Assert.Single(db.Locations(includeInactive: true).Where(x => x.Id == source.Id));
+        Assert.False(archivedSource.IsActive);
+        Assert.Equal(target.Id, archivedSource.MergedIntoLocationId);
+        Assert.Equal("Вороний Брод", archivedSource.Name);
+        Assert.Equal("Советская, 14", archivedSource.Address);
+
         Assert.Equal(target.Id, Assert.Single(db.TerminalBindings()).LocationId);
         Assert.Equal(target.Id, Assert.Single(db.RegisterBindings()).LocationId);
         Assert.Equal(target.Id, Assert.Single(db.ManualCashPostings(organization.Id, 2026, 9, target.Id)).LocationId);
         var summary = Assert.Single(db.PointDaySummaries(organization.Id, 2026, 9, target.Id));
         Assert.Equal(1000m, summary.BankElectronic);
         Assert.Equal(1200m, summary.ShiftTotal);
+        Assert.Contains(db.AuditEntries(), x => x.Action == "location.merge" && x.Details.Contains(source.Id.ToString(), StringComparison.Ordinal));
     }
 
     [Fact]
