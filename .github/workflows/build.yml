@@ -52,7 +52,7 @@ jobs:
         shell: pwsh
         run: |
           if ('${{ steps.portable.outcome }}' -ne 'success') {
-            "### Actions artifact upload unavailable`nCompilation and tests have separate results. The ZIP could not be uploaded to Actions storage. A separate private preview release is attempted only after a successful build." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "### Actions artifact upload unavailable`nCompilation and tests have separate results. The ZIP could not be uploaded to Actions storage. A separate preview release is attempted only after a successful build." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
   preview:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -71,19 +71,23 @@ jobs:
       - name: Package
         shell: pwsh
         run: Compress-Archive -Path artifacts/KopCashDesk/* -DestinationPath artifacts/KopCashDesk-win-x64.zip
-      - name: Publish private preview release
+      - name: Publish preview release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'v0.4.7-preview'
+          [xml]$project = Get-Content 'src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj'
+          $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Version is missing in KopCashDesk.Desktop.csproj' }
+          $tag = "v$version-preview"
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $notes = "Предварительная версия 0.4.7. Исправлена кнопка сверки: теперь она открывает рабочий свод касса ↔ терминал с суммами безнала, разницей и статусом по дням и месяцам. Сохраняется импорт Frontol 6 report.txt из 0.4.6. Commit: $env:GITHUB_SHA"
+          $title = "КОП Кассы $version — накопительная FIFO-сверка"
+          $notes = "Версия $version. Добавлена детерминированная накопительная FIFO-сверка: поздняя касса закрывает старые терминальные суммы, частичные погашения сохраняются отдельными связями; свод отделён от сверки; отсутствующие данные не считаются нулём; ручные привязки терминалов защищены от автоматики; merge точек сохраняет историю. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --title 'КОП Кассы 0.4.7 — рабочая сверка касса ↔ терминал' --notes $notes --prerelease --target $env:GITHUB_SHA
+            gh release create $tag $asset --title $title --notes $notes --prerelease --target $env:GITHUB_SHA
           } else {
             gh release upload $tag $asset --clobber
-            if ($LASTEXITCODE -eq 0) { gh release edit $tag --notes $notes --target $env:GITHUB_SHA }
+            if ($LASTEXITCODE -eq 0) { gh release edit $tag --title $title --notes $notes --target $env:GITHUB_SHA }
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
