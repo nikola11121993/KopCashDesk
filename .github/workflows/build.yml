@@ -25,7 +25,7 @@ jobs:
       - name: Test
         run: dotnet test tests/KopCashDesk.Tests/KopCashDesk.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=tests.trx"
       - name: Publish Windows x64
-        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true --output artifacts/KopCashDesk
+        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=false --output artifacts/KopCashDesk
       - name: Package
         shell: pwsh
         run: Compress-Archive -Path artifacts/KopCashDesk/* -DestinationPath artifacts/KopCashDesk-win-x64.zip
@@ -67,7 +67,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Publish verified source
-        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true --output artifacts/KopCashDesk
+        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=false --output artifacts/KopCashDesk
       - name: Package
         shell: pwsh
         run: Compress-Archive -Path artifacts/KopCashDesk/* -DestinationPath artifacts/KopCashDesk-win-x64.zip
@@ -81,8 +81,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Version is missing in KopCashDesk.Desktop.csproj' }
           $tag = "v$version-preview"
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $title = "КОП Кассы $version — накопительная FIFO-сверка"
-          $notes = "Версия $version. Добавлена детерминированная накопительная FIFO-сверка: поздняя касса закрывает старые терминальные суммы, частичные погашения сохраняются отдельными связями; свод отделён от сверки; отсутствующие данные не считаются нулём; ручные привязки терминалов защищены от автоматики; merge точек сохраняет историю. Commit: $env:GITHUB_SHA"
+          $title = "КОП Кассы $version — единый импорт и исправление дублей"
+          $notes = "Версия $version. Один импорт для Сбер/Такском/Frontol/CRPT; поддержка архивов ККТ .crpt; исправление дублей между Такском и Frontol; при запуске выполняется очистка уже накопленных дублей. Windows-сборка теперь многофайловая self-contained вместо тяжёлого single-file EXE для более быстрого запуска. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $asset --title $title --notes $notes --prerelease --target $env:GITHUB_SHA
