@@ -4,7 +4,7 @@ namespace KopCashDesk.Data;
 
 internal static class DatabaseMigrations
 {
-    public const long CurrentVersion = 2;
+    public const long CurrentVersion = 3;
 
     public static void Apply(Database database)
     {
@@ -22,6 +22,8 @@ internal static class DatabaseMigrations
 
         if (version < 2)
             MigrateToV2(db);
+        if (version < 3)
+            MigrateToV3(db);
     }
 
     private static void MigrateToV2(SqliteConnection db)
@@ -113,6 +115,62 @@ internal static class DatabaseMigrations
         {
             audit.Transaction = tx;
             audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','1 -> 2: FIFO reconciliation, binding provenance, soft merge')";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void MigrateToV3(SqliteConnection db)
+    {
+        using var tx = db.BeginTransaction();
+        Execute(db, tx, """
+            CREATE TABLE IF NOT EXISTS shift_source_links(
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL REFERENCES organizations(id),
+                location_id TEXT NOT NULL REFERENCES locations(id),
+                business_date TEXT NOT NULL,
+                canonical_shift_id TEXT NOT NULL REFERENCES shift_closures(id),
+                observed_shift_id TEXT NOT NULL REFERENCES shift_closures(id),
+                match_kind TEXT NOT NULL,
+                match_confidence REAL NOT NULL,
+                time_difference_seconds INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(canonical_shift_id, observed_shift_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_shift_source_links_observed
+                ON shift_source_links(observed_shift_id);
+            CREATE INDEX IF NOT EXISTS ix_shift_source_links_period
+                ON shift_source_links(organization_id, location_id, business_date);
+
+            CREATE TABLE IF NOT EXISTS fiscal_source_conflicts(
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL REFERENCES organizations(id),
+                location_id TEXT NOT NULL REFERENCES locations(id),
+                business_date TEXT NOT NULL,
+                taxcom_shift_id TEXT NOT NULL REFERENCES shift_closures(id),
+                frontol_shift_id TEXT NOT NULL REFERENCES shift_closures(id),
+                reason TEXT NOT NULL,
+                time_difference_seconds INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(taxcom_shift_id, frontol_shift_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_fiscal_source_conflicts_period
+                ON fiscal_source_conflicts(organization_id, location_id, business_date);
+            """);
+
+        using (var version = db.CreateCommand())
+        {
+            version.Transaction = tx;
+            version.CommandText = "UPDATE schema_version SET version=3";
+            version.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','2 -> 3: cross-source fiscal shift links and conflicts')";
             audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
             audit.ExecuteNonQuery();
         }
