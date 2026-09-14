@@ -2,9 +2,7 @@
   <DockPanel>
     <Menu DockPanel.Dock="Top">
       <MenuItem Header="_Файл">
-        <MenuItem Header="Импорт архивов Сбер..." Click="SberImport_Click"/>
-        <MenuItem Header="Импорт кассовых отчётов Такском..." Click="TaxcomShiftImport_Click"/>
-        <MenuItem Header="Импорт Frontol 6 report.txt..." Click="FrontolReportImport_Click"/>
+        <MenuItem Header="Импорт файлов..." Click="UnifiedImport_Click"/>
         <Separator/>
         <MenuItem Header="Создать организацию..." Click="NewOrganization_Click"/>
         <MenuItem Header="Резервная копия..." Click="Backup_Click"/>
@@ -19,9 +17,7 @@
         <MenuItem Header="Объединить торговые точки..." Click="MergeLocations_Click"/>
       </MenuItem>
       <MenuItem Header="_Сервис">
-        <MenuItem Header="Импорт архивов Сбер..." Click="SberImport_Click"/>
-        <MenuItem Header="Импорт кассовых отчётов Такском..." Click="TaxcomShiftImport_Click"/>
-        <MenuItem Header="Импорт Frontol 6 report.txt..." Click="FrontolReportImport_Click"/>
+        <MenuItem Header="Импорт файлов..." Click="UnifiedImport_Click"/>
         <Separator/>
         <MenuItem Header="Интеграции" Click="Integrations_Click"/>
         <MenuItem Header="Такском — логин и пароль..." Click="TaxcomSettings_Click"/>
@@ -68,9 +64,7 @@
           <Button Content="Операции" Tag="operations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Сверка касса ↔ терминал" Click="Reconciliation_Click" HorizontalContentAlignment="Left"/>
           <Separator Margin="4,12"/>
-          <Button Content="Сбер — импорт архивов" Click="SberImport_Click" HorizontalContentAlignment="Left"/>
-          <Button Content="Такском — импорт смен" Click="TaxcomShiftImport_Click" HorizontalContentAlignment="Left"/>
-          <Button Content="Frontol 6 — импорт report.txt" Click="FrontolReportImport_Click" HorizontalContentAlignment="Left"/>
+          <Button Content="Импорт файлов" Click="UnifiedImport_Click" HorizontalContentAlignment="Left" ToolTip="Сбер ZIP/XLSX, Такском XLSX/ZIP, Frontol report.txt и CRPT"/>
           <Button Content="Интеграции" Tag="integrations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Такском — настройки" Click="TaxcomSettings_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Настройки" Tag="settings" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
