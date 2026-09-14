@@ -14,9 +14,14 @@ public sealed class ManualCashEditWindow : Window
     public decimal? Value { get; private set; }
     public bool ClearRequested { get; private set; }
 
-    public ManualCashEditWindow(string point, DateOnly date, decimal? currentValue)
+    public ManualCashEditWindow(
+        string point,
+        DateOnly date,
+        decimal? currentValue,
+        string windowTitle = "Касса — ручная сумма",
+        string amountLabel = "Касса безнал:")
     {
-        Title = "Касса — ручная сумма";
+        Title = windowTitle;
         Width = 430;
         Height = 245;
         ResizeMode = ResizeMode.NoResize;
@@ -54,7 +59,7 @@ public sealed class ManualCashEditWindow : Window
         amountPanel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         amountPanel.Children.Add(new TextBlock
         {
-            Text = "Касса безнал:",
+            Text = amountLabel,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 12, 0)
         });
@@ -64,7 +69,7 @@ public sealed class ManualCashEditWindow : Window
             FontSize = 18,
             MinWidth = 180,
             Text = currentValue?.ToString("N2", _ru) ?? string.Empty,
-            ToolTip = "Введите сумму безнала на кассе. Можно использовать запятую или точку."
+            ToolTip = "Введите сумму. Можно использовать запятую или точку."
         };
         _amountBox.KeyDown += AmountBox_KeyDown;
         Grid.SetColumn(_amountBox, 1);
