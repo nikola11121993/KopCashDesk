@@ -61,6 +61,9 @@ public partial class MainWindow
         bool HasManualCash(DaySummaryRow row) => _db.ManualCashPostings(row.OrganizationId, row.DateValue.Year, row.DateValue.Month, row.LocationId)
             .Any(x => x.Date == row.DateValue);
 
+        bool HasManualTerminal(DaySummaryRow row) => _db.ManualTerminalPostings(row.OrganizationId, row.DateValue.Year, row.DateValue.Month, row.LocationId)
+            .Any(x => x.Date == row.DateValue);
+
         void ToggleSberCopy(DaySummaryRow row, bool isChecked)
         {
             if (row.Sber is null)
@@ -145,6 +148,30 @@ public partial class MainWindow
             RefreshData();
         }
 
+        void DeleteManualDay(DaySummaryRow row)
+        {
+            var hasCash = HasManualCash(row);
+            var hasTerminal = HasManualTerminal(row);
+            if (!hasCash && !hasTerminal)
+            {
+                MessageBox.Show(this,
+                    "За этот день нет ручных данных. Импортированные отчёты программа отсюда не удаляет.",
+                    "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var answer = MessageBox.Show(this,
+                $"Удалить ручные данные за {row.Date}, {row.Point}?\n\n" +
+                "Будут удалены только введённые вручную суммы терминала и кассы. Импортированные Сбер/Такском/Frontol останутся в базе.",
+                "Удалить ручной день", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+
+            if (hasTerminal) _db.ClearManualTerminal(row.OrganizationId, row.LocationId, row.DateValue);
+            if (hasCash) _db.ClearManualCash(row.OrganizationId, row.LocationId, row.DateValue);
+            StatusText.Text = $"{row.Point}: ручные данные за {row.Date} удалены";
+            RefreshData();
+        }
+
         void AddManualDay()
         {
             var selectedLocationId = (locationBox.SelectedItem as LocationOption)?.Id;
@@ -217,7 +244,7 @@ public partial class MainWindow
                 RefreshData();
         }
 
-        dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash, EditManualTerminal);
+        dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash, EditManualTerminal, DeleteManualDay);
         monthlyGrid = BuildMonthlySummaryGrid();
         addDayButton.Click += (_, _) => AddManualDay();
         var tabs = new TabControl();
