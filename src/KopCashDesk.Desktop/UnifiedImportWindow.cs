@@ -22,19 +22,41 @@ public enum UnifiedImportKind
 
 public sealed class UnifiedImportWindow : Window
 {
-    private sealed record FileItem(string Path, UnifiedImportKind Kind)
+    private sealed class FileItem
     {
-        public string Display => $"{KindText(Kind),-10}  {System.IO.Path.GetFileName(Path)}";
+        public FileItem(string path, UnifiedImportKind kind)
+        {
+            Path = path;
+            Kind = kind;
+        }
+
+        public string Path { get; }
+        public UnifiedImportKind Kind { get; }
+        public Guid? OrganizationId { get; set; }
+        public Guid? LocationId { get; set; }
+        public string OrganizationName { get; set; } = "";
+        public string LocationName { get; set; } = "";
+        public string FileName => System.IO.Path.GetFileName(Path);
+        public string Type => KindText(Kind);
+        public string Organization => Kind == UnifiedImportKind.Frontol ? EmptyAsPending(OrganizationName) : "авто";
+        public string Location => Kind == UnifiedImportKind.Frontol ? EmptyAsPending(LocationName) : "авто";
+        public string Status => Kind switch
+        {
+            UnifiedImportKind.Unknown => "Не удалось определить формат",
+            UnifiedImportKind.Frontol when OrganizationId is null || LocationId is null => "Нужно назначить точку",
+            _ => "Готово"
+        };
+
+        private static string EmptyAsPending(string value) => string.IsNullOrWhiteSpace(value) ? "не назначено" : value;
     }
 
     private readonly Database _database;
     private readonly Action _afterImport;
     private readonly List<FileItem> _files = [];
-    private readonly ListBox _fileList = new();
+    private readonly DataGrid _fileGrid = new();
     private readonly TextBlock _result = new();
-    private readonly ComboBox _organizationBox = new();
-    private readonly ComboBox _locationBox = new();
     private readonly Button _importButton;
+    private readonly Button _assignFrontolButton;
 
     public UnifiedImportWindow(Database database, Guid? fallbackOrganizationId, Action afterImport)
     {
@@ -42,10 +64,10 @@ public sealed class UnifiedImportWindow : Window
         _afterImport = afterImport;
 
         Title = "Импорт файлов — Сбер, касса, Frontol, CRPT";
-        Width = 980;
-        Height = 690;
-        MinWidth = 800;
-        MinHeight = 540;
+        Width = 1120;
+        Height = 720;
+        MinWidth = 900;
+        MinHeight = 560;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = Brushes.White;
         AllowDrop = true;
@@ -53,7 +75,6 @@ public sealed class UnifiedImportWindow : Window
         Drop += Window_Drop;
 
         var root = new Grid { Margin = new Thickness(22) };
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -68,50 +89,12 @@ public sealed class UnifiedImportWindow : Window
         });
         title.Children.Add(new TextBlock
         {
-            Text = "Можно выбрать сразу ZIP/XLSX Сбера, XLSX/ZIP Такском, Frontol report.txt и архивы ККТ .crpt. Тип файла определяется автоматически.",
+            Text = "Сбер, Такском и CRPT определяют организацию и точку автоматически. Для каждого Frontol report.txt точка назначается отдельно.",
             Margin = new Thickness(0, 6, 0, 0),
             Foreground = Brushes.DimGray,
             TextWrapping = TextWrapping.Wrap
         });
         root.Children.Add(title);
-
-        var frontolTarget = new Grid { Margin = new Thickness(0, 0, 0, 12) };
-        frontolTarget.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        frontolTarget.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        frontolTarget.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        frontolTarget.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        frontolTarget.Children.Add(new TextBlock
-        {
-            Text = "Frontol — организация:",
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 8, 0)
-        });
-
-        _organizationBox.DisplayMemberPath = nameof(Organization.Name);
-        _organizationBox.MinWidth = 240;
-        _organizationBox.Margin = new Thickness(0, 0, 18, 0);
-        _organizationBox.SelectionChanged += (_, _) => RefreshLocations();
-        Grid.SetColumn(_organizationBox, 1);
-        frontolTarget.Children.Add(_organizationBox);
-
-        var pointLabel = new TextBlock
-        {
-            Text = "точка:",
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        Grid.SetColumn(pointLabel, 2);
-        frontolTarget.Children.Add(pointLabel);
-
-        _locationBox.DisplayMemberPath = nameof(Location.Name);
-        _locationBox.MinWidth = 280;
-        _locationBox.SelectionChanged += (_, _) => UpdateImportEnabled();
-        Grid.SetColumn(_locationBox, 3);
-        frontolTarget.Children.Add(_locationBox);
-
-        Grid.SetRow(frontolTarget, 1);
-        root.Children.Add(frontolTarget);
 
         var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
         var add = new Button
@@ -122,40 +105,42 @@ public sealed class UnifiedImportWindow : Window
         };
         add.Click += Add_Click;
 
+        _assignFrontolButton = new Button
+        {
+            Content = "Назначить Frontol...",
+            Padding = new Thickness(16, 8, 16, 8),
+            Margin = new Thickness(0, 0, 8, 0),
+            IsEnabled = false,
+            ToolTip = "Организация и точка задаются только для выбранного report.txt"
+        };
+        _assignFrontolButton.Click += (_, _) => AssignSelectedFrontol();
+
         var clear = new Button { Content = "Очистить", Padding = new Thickness(16, 8, 16, 8) };
         clear.Click += (_, _) =>
         {
             _files.Clear();
-            RefreshList();
+            RefreshGrid();
             _result.Text = "Добавьте отчёты.";
         };
         tools.Children.Add(add);
+        tools.Children.Add(_assignFrontolButton);
         tools.Children.Add(clear);
-        Grid.SetRow(tools, 2);
+        Grid.SetRow(tools, 1);
         root.Children.Add(tools);
 
         var center = new Grid();
         center.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
         center.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
 
+        ConfigureFileGrid();
         var listBorder = new System.Windows.Controls.Border
         {
             BorderBrush = Brushes.LightGray,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(6)
+            Padding = new Thickness(6),
+            Child = _fileGrid
         };
-        _fileList.SelectionMode = SelectionMode.Extended;
-        _fileList.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Delete) RemoveSelected();
-        };
-        var menu = new ContextMenu();
-        var remove = new MenuItem { Header = "Убрать из списка" };
-        remove.Click += (_, _) => RemoveSelected();
-        menu.Items.Add(remove);
-        _fileList.ContextMenu = menu;
-        listBorder.Child = _fileList;
         center.Children.Add(listBorder);
 
         var resultBorder = new System.Windows.Controls.Border
@@ -181,7 +166,7 @@ public sealed class UnifiedImportWindow : Window
         Grid.SetColumn(resultBorder, 1);
         center.Children.Add(resultBorder);
 
-        Grid.SetRow(center, 3);
+        Grid.SetRow(center, 2);
         root.Children.Add(center);
 
         var buttons = new StackPanel
@@ -208,46 +193,42 @@ public sealed class UnifiedImportWindow : Window
         close.Click += (_, _) => Close();
         buttons.Children.Add(_importButton);
         buttons.Children.Add(close);
-        Grid.SetRow(buttons, 4);
+        Grid.SetRow(buttons, 3);
         root.Children.Add(buttons);
 
         Content = root;
-        LoadOrganizations(fallbackOrganizationId);
     }
 
-    private void LoadOrganizations(Guid? fallbackOrganizationId)
+    private void ConfigureFileGrid()
     {
-        var organizations = _database.Organizations().ToArray();
-        _organizationBox.ItemsSource = organizations;
-        _organizationBox.SelectedItem = fallbackOrganizationId is Guid id
-            ? organizations.FirstOrDefault(x => x.Id == id)
-            : organizations.Length == 1 ? organizations[0] : null;
-        RefreshLocations();
-    }
+        _fileGrid.AutoGenerateColumns = false;
+        _fileGrid.IsReadOnly = true;
+        _fileGrid.SelectionMode = DataGridSelectionMode.Extended;
+        _fileGrid.CanUserAddRows = false;
+        _fileGrid.CanUserDeleteRows = false;
+        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Файл", Binding = new System.Windows.Data.Binding(nameof(FileItem.FileName)), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
+        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Тип", Binding = new System.Windows.Data.Binding(nameof(FileItem.Type)), Width = 90 });
+        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Организация", Binding = new System.Windows.Data.Binding(nameof(FileItem.Organization)), Width = 150 });
+        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Торговая точка", Binding = new System.Windows.Data.Binding(nameof(FileItem.Location)), Width = 180 });
+        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Статус", Binding = new System.Windows.Data.Binding(nameof(FileItem.Status)), Width = 170 });
+        _fileGrid.SelectionChanged += (_, _) => UpdateImportEnabled();
+        _fileGrid.MouseDoubleClick += (_, _) =>
+        {
+            if (_fileGrid.SelectedItem is FileItem { Kind: UnifiedImportKind.Frontol }) AssignSelectedFrontol();
+        };
+        _fileGrid.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Delete) RemoveSelected();
+        };
 
-    private void RefreshLocations()
-    {
-        var organization = _organizationBox.SelectedItem as Organization;
-        var locations = organization is null
-            ? Array.Empty<Location>()
-            : _database.Locations()
-                .Where(x => x.OrganizationId == organization.Id && !x.IsExcluded)
-                .OrderBy(x => x.Name)
-                .ToArray();
-
-        _locationBox.ItemsSource = locations;
-        var preferred = locations.FirstOrDefault(IsCafeteria6);
-        if (preferred is null && locations.Length == 1) preferred = locations[0];
-        _locationBox.SelectedItem = preferred;
-        UpdateImportEnabled();
-    }
-
-    private static bool IsCafeteria6(Location location)
-    {
-        var name = SberAcquiringImporter.NormalizeForMatch(location.Name);
-        return name.Contains("рефтин", StringComparison.Ordinal)
-               && name.Contains("грэс", StringComparison.Ordinal)
-               && (name.Contains("6 стол", StringComparison.Ordinal) || name.Contains("столовая 6", StringComparison.Ordinal));
+        var menu = new ContextMenu();
+        var assign = new MenuItem { Header = "Назначить Frontol..." };
+        assign.Click += (_, _) => AssignSelectedFrontol();
+        var remove = new MenuItem { Header = "Убрать из списка" };
+        remove.Click += (_, _) => RemoveSelected();
+        menu.Items.Add(assign);
+        menu.Items.Add(remove);
+        _fileGrid.ContextMenu = menu;
     }
 
     private void Add_Click(object sender, RoutedEventArgs e)
@@ -283,45 +264,120 @@ public sealed class UnifiedImportWindow : Window
             if (kind == UnifiedImportKind.Unknown) unknown.Add(System.IO.Path.GetFileName(path));
         }
 
-        RefreshList();
+        RefreshGrid();
         _result.Text = unknown.Count == 0
-            ? $"Готово к импорту: {_files.Count} файл(а/ов)."
+            ? $"Готово к импорту: {_files.Count} файл(а/ов). Frontol назначается по каждому файлу отдельно."
             : "Не удалось определить тип: " + string.Join(", ", unknown);
     }
 
-    private void RefreshList()
+    private void RefreshGrid()
     {
-        _fileList.ItemsSource = null;
-        _fileList.ItemsSource = _files.Select(x => x.Display).ToArray();
+        _fileGrid.ItemsSource = null;
+        _fileGrid.ItemsSource = _files;
         UpdateImportEnabled();
     }
 
     private void RemoveSelected()
     {
-        var indices = _fileList.SelectedItems.Cast<object>()
-            .Select(item => _fileList.Items.IndexOf(item))
-            .Where(index => index >= 0)
-            .OrderByDescending(index => index)
-            .ToArray();
-        foreach (var index in indices) _files.RemoveAt(index);
-        RefreshList();
+        var selected = _fileGrid.SelectedItems.Cast<FileItem>().ToArray();
+        foreach (var item in selected) _files.Remove(item);
+        RefreshGrid();
+    }
+
+    private void AssignSelectedFrontol()
+    {
+        if (_fileGrid.SelectedItem is not FileItem item || item.Kind != UnifiedImportKind.Frontol)
+        {
+            MessageBox.Show(this, "Выберите в таблице файл Frontol report.txt.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var organizations = _database.Organizations().OrderBy(x => x.Name).ToArray();
+        var dialog = new Window
+        {
+            Owner = this,
+            Title = "Назначение Frontol — " + item.FileName,
+            Width = 620,
+            Height = 260,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = Brushes.White
+        };
+        var panel = new Grid { Margin = new Thickness(22) };
+        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(135) });
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var orgLabel = new TextBlock { Text = "Организация:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 10) };
+        var orgBox = new ComboBox { ItemsSource = organizations, DisplayMemberPath = nameof(Organization.Name), Margin = new Thickness(0, 0, 0, 10) };
+        var locLabel = new TextBlock { Text = "Торговая точка:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 10) };
+        var locBox = new ComboBox { DisplayMemberPath = nameof(Location.Name), Margin = new Thickness(0, 0, 0, 10) };
+        Grid.SetRow(orgLabel, 0); Grid.SetColumn(orgLabel, 0);
+        Grid.SetRow(orgBox, 0); Grid.SetColumn(orgBox, 1);
+        Grid.SetRow(locLabel, 1); Grid.SetColumn(locLabel, 0);
+        Grid.SetRow(locBox, 1); Grid.SetColumn(locBox, 1);
+        panel.Children.Add(orgLabel); panel.Children.Add(orgBox); panel.Children.Add(locLabel); panel.Children.Add(locBox);
+
+        void RefreshLocations()
+        {
+            var org = orgBox.SelectedItem as Organization;
+            var locations = org is null
+                ? Array.Empty<Location>()
+                : _database.Locations().Where(x => x.OrganizationId == org.Id && !x.IsExcluded).OrderBy(x => x.Name).ToArray();
+            locBox.ItemsSource = locations;
+            if (item.LocationId is Guid current) locBox.SelectedItem = locations.FirstOrDefault(x => x.Id == current);
+        }
+        orgBox.SelectionChanged += (_, _) => RefreshLocations();
+        if (item.OrganizationId is Guid orgId) orgBox.SelectedItem = organizations.FirstOrDefault(x => x.Id == orgId);
+        RefreshLocations();
+
+        var hint = new TextBlock
+        {
+            Text = "Это назначение применяется только к выбранному report.txt. Другие Frontol-файлы назначаются отдельно.",
+            Foreground = Brushes.DimGray,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 14)
+        };
+        Grid.SetRow(hint, 2); Grid.SetColumnSpan(hint, 2); panel.Children.Add(hint);
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var ok = new Button { Content = "Сохранить", Padding = new Thickness(18, 7, 18, 7), Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+        var cancel = new Button { Content = "Отмена", Padding = new Thickness(18, 7, 18, 7), IsCancel = true };
+        ok.Click += (_, _) =>
+        {
+            if (orgBox.SelectedItem is not Organization org || locBox.SelectedItem is not Location loc)
+            {
+                MessageBox.Show(dialog, "Выберите организацию и торговую точку.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            item.OrganizationId = org.Id;
+            item.LocationId = loc.Id;
+            item.OrganizationName = org.Name;
+            item.LocationName = loc.Name;
+            dialog.DialogResult = true;
+        };
+        buttons.Children.Add(ok); buttons.Children.Add(cancel);
+        Grid.SetRow(buttons, 3); Grid.SetColumnSpan(buttons, 2); panel.Children.Add(buttons);
+        dialog.Content = panel;
+
+        if (dialog.ShowDialog() == true) RefreshGrid();
     }
 
     private void UpdateImportEnabled()
     {
         var hasUnknown = _files.Any(x => x.Kind == UnifiedImportKind.Unknown);
-        var hasFrontol = _files.Any(x => x.Kind == UnifiedImportKind.Frontol);
-        var frontolReady = !hasFrontol ||
-                           (_organizationBox.SelectedItem is Organization && _locationBox.SelectedItem is Location);
+        var frontolReady = _files.Where(x => x.Kind == UnifiedImportKind.Frontol)
+            .All(x => x.OrganizationId is not null && x.LocationId is not null);
         _importButton.IsEnabled = _files.Count > 0 && !hasUnknown && frontolReady;
+        _assignFrontolButton.IsEnabled = _fileGrid.SelectedItem is FileItem { Kind: UnifiedImportKind.Frontol };
     }
 
     private async void Import_Click(object sender, RoutedEventArgs e)
     {
         if (!_importButton.IsEnabled) return;
-
-        var organization = _organizationBox.SelectedItem as Organization;
-        var location = _locationBox.SelectedItem as Location;
         var files = _files.ToArray();
 
         _importButton.IsEnabled = false;
@@ -342,7 +398,7 @@ public sealed class UnifiedImportWindow : Window
                 var taxcom = files.Where(x => x.Kind == UnifiedImportKind.Taxcom).Select(x => x.Path).ToArray();
                 if (taxcom.Length > 0)
                 {
-                    var summary = new TaxcomShiftReportImporter(_database, organization?.Id).ImportFiles(taxcom);
+                    var summary = new TaxcomShiftReportImporter(_database).ImportFiles(taxcom);
                     result.Add("ТАКСКОМ\n" + summary.ToDisplayText());
                 }
 
@@ -353,18 +409,18 @@ public sealed class UnifiedImportWindow : Window
                     result.Add("CRPT\n" + summary.ToDisplayText());
                 }
 
-                var frontol = files.Where(x => x.Kind == UnifiedImportKind.Frontol).Select(x => x.Path).ToArray();
-                if (frontol.Length > 0)
+                var frontolGroups = files.Where(x => x.Kind == UnifiedImportKind.Frontol)
+                    .GroupBy(x => (OrganizationId: x.OrganizationId!.Value, LocationId: x.LocationId!.Value));
+                foreach (var group in frontolGroups)
                 {
-                    if (organization is null || location is null)
-                        throw new InvalidDataException("Для Frontol нужно выбрать организацию и точку.");
-                    var summary = new FrontolReportImporter(_database, organization.Id, location.Id).ImportFiles(frontol);
-                    result.Add("FRONTOL\n" + summary.ToDisplayText());
+                    var summary = new FrontolReportImporter(_database, group.Key.OrganizationId, group.Key.LocationId)
+                        .ImportFiles(group.Select(x => x.Path));
+                    var point = group.First().LocationName;
+                    result.Add($"FRONTOL — {point}\n" + summary.ToDisplayText());
                 }
 
-                var repaired = _database.EnsureV052Fixes();
-                if (repaired > 0) result.Add($"Проверка дублей: исправлено {repaired} записей.");
-
+                var matching = _database.RebuildCrossSourceShiftMatches();
+                result.Add($"Сопоставление кассовых источников\nСовпавших Taxcom + Frontol: {matching.MatchedPairs}\nКонфликтов, требующих проверки: {matching.Conflicts}");
                 return string.Join("\n\n------------------------------\n\n", result);
             });
 
