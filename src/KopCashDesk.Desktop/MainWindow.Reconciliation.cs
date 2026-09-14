@@ -95,7 +95,7 @@ public partial class MainWindow
         grid.Columns.Add(ReconciliationMoneyColumn("Пробито позже", "ClosedLater", 115));
         grid.Columns.Add(ReconciliationMoneyColumn("Остаток за день", "DayRemaining", 120));
         grid.Columns.Add(ReconciliationMoneyColumn("Общий остаток", "TotalRemaining", 120));
-        grid.Columns.Add(ReconciliationTextColumn("Статус", "Status", 145));
+        grid.Columns.Add(ReconciliationTextColumn("Статус", "Status", 210));
         grid.Columns.Add(ReconciliationTextColumn("Закрытие смены", "ClosedAt", 145));
         grid.Columns.Add(ReconciliationTextColumn("№ смены", "Shift", 95));
         Grid.SetRow(grid, 2);
@@ -106,7 +106,19 @@ public partial class MainWindow
             if (yearBox.SelectedItem is not int year) return;
             var month = (monthBox.SelectedItem as ReconciliationMonthOption)?.Number;
             var locationId = (locationBox.SelectedItem as ReconciliationLocationOption)?.Id;
-            var days = _db.ReconciliationDays(SelectedOrganizationId, year, month, locationId);
+            var conflictKeys = _db.FiscalSourceConflicts()
+                .Select(x => (x.OrganizationId, x.LocationId, x.BusinessDate))
+                .ToHashSet();
+            var days = _db.ReconciliationDays(SelectedOrganizationId, year, month, locationId)
+                .Select(x => conflictKeys.Contains((x.OrganizationId, x.LocationId, x.Date))
+                    ? x with
+                    {
+                        CashElectronic = null,
+                        RequiresReview = true,
+                        Status = "Конфликт кассовых источников — требуется проверка"
+                    }
+                    : x)
+                .ToArray();
             var rows = days.Select(x => new ReconciliationRow(x)).ToArray();
             grid.ItemsSource = rows;
 
