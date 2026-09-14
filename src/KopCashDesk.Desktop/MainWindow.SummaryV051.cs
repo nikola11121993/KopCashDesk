@@ -48,7 +48,6 @@ public partial class MainWindow
             Padding = new Thickness(12, 5, 12, 5),
             ToolTip = "Добавить дату и сумму кассы без загрузки отчёта Taxcom/Frontol"
         };
-        addDayButton.Click += (_, _) => AddManualDay();
         filters.Children.Add(addDayButton);
         root.Children.Add(filters);
 
@@ -193,6 +192,7 @@ public partial class MainWindow
 
         dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash);
         monthlyGrid = BuildMonthlySummaryGrid();
+        addDayButton.Click += (_, _) => AddManualDay();
         var tabs = new TabControl();
         tabs.Items.Add(new TabItem { Header = "По дням", Content = dailyGrid });
         tabs.Items.Add(new TabItem { Header = "По месяцам", Content = monthlyGrid });
