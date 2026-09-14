@@ -215,7 +215,10 @@ public partial class MainWindow
         return root;
     }
 
-    private static DataGrid BuildDailySummaryGrid(Action<DaySummaryRow, bool> toggleSberCopy, Action<DaySummaryRow> editManualCash)
+    private static DataGrid BuildDailySummaryGrid(
+        Action<DaySummaryRow, bool> toggleSberCopy,
+        Action<DaySummaryRow> editManualCash,
+        Action<DaySummaryRow>? editManualTerminal = null)
     {
         var grid = new DataGrid
         {
@@ -227,7 +230,7 @@ public partial class MainWindow
         };
         grid.Columns.Add(TextColumn("Дата", "Date", 105));
         grid.Columns.Add(TextColumn("Точка", "Point", new DataGridLength(2, DataGridLengthUnitType.Star)));
-        grid.Columns.Add(MoneyColumn("Терминалы Сбер", "Sber", 130));
+        grid.Columns.Add(MoneyColumn("Терминал безнал", "Sber", 130));
         grid.Columns.Add(MoneyColumn("Касса безнал", "CashElectronic", 125));
         grid.Columns.Add(MoneyColumn("Закрыто сменой", "ShiftTotal", 135));
         grid.Columns.Add(TextColumn("Смен", "ShiftCount", 60));
@@ -240,7 +243,7 @@ public partial class MainWindow
         factory.SetBinding(CheckBox.IsEnabledProperty, new Binding("CanCopySber") { Mode = BindingMode.OneWay });
         factory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
         factory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
-        factory.SetValue(FrameworkElement.ToolTipProperty, "Поставить сумму терминалов Сбер в кассу за этот день. Галочка не создаёт фискальный чек.");
+        factory.SetValue(FrameworkElement.ToolTipProperty, "Поставить сумму терминала в кассу за этот день. Галочка не создаёт фискальный чек.");
         factory.AddHandler(CheckBox.ClickEvent, new RoutedEventHandler((sender, _) =>
         {
             if (sender is CheckBox checkBox && checkBox.DataContext is DaySummaryRow row)
@@ -255,11 +258,25 @@ public partial class MainWindow
 
         grid.MouseDoubleClick += (_, _) =>
         {
-            if (grid.SelectedItem is DaySummaryRow row && string.Equals(grid.CurrentCell.Column?.Header?.ToString(), "Касса безнал", StringComparison.Ordinal))
+            if (grid.SelectedItem is not DaySummaryRow row) return;
+            var header = grid.CurrentCell.Column?.Header?.ToString();
+            if (string.Equals(header, "Касса безнал", StringComparison.Ordinal))
                 editManualCash(row);
+            else if (string.Equals(header, "Терминал безнал", StringComparison.Ordinal) && editManualTerminal is not null)
+                editManualTerminal(row);
         };
 
         var menu = new ContextMenu();
+        if (editManualTerminal is not null)
+        {
+            var editTerminal = new MenuItem { Header = "Изменить сумму терминала..." };
+            editTerminal.Click += (_, _) =>
+            {
+                if (grid.SelectedItem is DaySummaryRow row) editManualTerminal(row);
+            };
+            menu.Items.Add(editTerminal);
+        }
+
         var edit = new MenuItem { Header = "Изменить сумму кассы..." };
         edit.Click += (_, _) =>
         {
@@ -267,7 +284,7 @@ public partial class MainWindow
         };
         menu.Items.Add(edit);
 
-        var copy = new MenuItem { Header = "Поставить сумму Сбера в кассу" };
+        var copy = new MenuItem { Header = "Поставить сумму терминала в кассу" };
         copy.Click += (_, _) =>
         {
             if (grid.SelectedItem is DaySummaryRow row) toggleSberCopy(row, true);
@@ -283,7 +300,7 @@ public partial class MainWindow
         var grid = new DataGrid { IsReadOnly = true, AutoGenerateColumns = false, SelectionMode = DataGridSelectionMode.Single };
         grid.Columns.Add(TextColumn("Месяц", "Period", 175));
         grid.Columns.Add(TextColumn("Точка", "Point", new DataGridLength(2, DataGridLengthUnitType.Star)));
-        grid.Columns.Add(MoneyColumn("Терминалы Сбер", "Sber", 130));
+        grid.Columns.Add(MoneyColumn("Терминал безнал", "Sber", 130));
         grid.Columns.Add(MoneyColumn("Касса безнал", "CashElectronic", 125));
         grid.Columns.Add(MoneyColumn("Закрыто сменами", "ShiftTotal", 140));
         grid.Columns.Add(TextColumn("Смен", "ShiftCount", 60));
