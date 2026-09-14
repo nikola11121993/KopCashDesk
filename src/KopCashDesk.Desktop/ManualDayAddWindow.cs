@@ -13,13 +13,15 @@ public sealed class ManualDayAddWindow : Window
     private readonly ComboBox _organizationBox = new();
     private readonly ComboBox _locationBox = new();
     private readonly DatePicker _datePicker = new();
-    private readonly TextBox _amountBox = new();
+    private readonly TextBox _terminalAmountBox = new();
+    private readonly TextBox _cashAmountBox = new();
     private readonly CultureInfo _ru = CultureInfo.GetCultureInfo("ru-RU");
 
     public Guid OrganizationId { get; private set; }
     public Guid LocationId { get; private set; }
     public DateOnly Date { get; private set; }
-    public decimal Amount { get; private set; }
+    public decimal TerminalAmount { get; private set; }
+    public decimal CashAmount { get; private set; }
 
     public ManualDayAddWindow(
         IReadOnlyList<Organization> organizations,
@@ -32,9 +34,9 @@ public sealed class ManualDayAddWindow : Window
         _locations = locations;
 
         Title = "Добавить день вручную";
-        Width = 520;
-        Height = 390;
-        MinWidth = 500;
+        Width = 560;
+        Height = 430;
+        MinWidth = 540;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
@@ -46,7 +48,7 @@ public sealed class ManualDayAddWindow : Window
 
         root.Children.Add(new TextBlock
         {
-            Text = "Добавить день без загрузки кассового отчёта",
+            Text = "Добавить день без загрузки отчётов",
             FontSize = 21,
             FontWeight = FontWeights.SemiBold,
             TextWrapping = TextWrapping.Wrap
@@ -54,7 +56,7 @@ public sealed class ManualDayAddWindow : Window
 
         var hint = new TextBlock
         {
-            Text = "Укажите дату, точку и сумму «Касса безнал». Никакой отчёт Taxcom/Frontol не импортируется — сохранится только ручная сумма.",
+            Text = "Укажите дату, точку, сумму терминала и сумму «Касса безнал». Никакие отчёты Сбер/Taxcom/Frontol не импортируются — сохранятся только ручные суммы за этот день.",
             Margin = new Thickness(0, 6, 0, 18),
             Foreground = System.Windows.Media.Brushes.DimGray,
             TextWrapping = TextWrapping.Wrap
@@ -81,6 +83,7 @@ public sealed class ManualDayAddWindow : Window
         var entryGrid = new Grid { Margin = new Thickness(0, 12, 0, 0) };
         entryGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         entryGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        entryGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
         var datePanel = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
         datePanel.Children.Add(new TextBlock { Text = "Дата", Margin = new Thickness(0, 0, 0, 5) });
@@ -89,14 +92,23 @@ public sealed class ManualDayAddWindow : Window
         datePanel.Children.Add(_datePicker);
         entryGrid.Children.Add(datePanel);
 
-        var amountPanel = new StackPanel();
-        amountPanel.Children.Add(new TextBlock { Text = "Касса безнал, ₽", Margin = new Thickness(0, 0, 0, 5) });
-        _amountBox.FontSize = 17;
-        _amountBox.ToolTip = "Введите сумму безнала на кассе. Можно использовать запятую или точку.";
-        _amountBox.KeyDown += AmountBox_KeyDown;
-        amountPanel.Children.Add(_amountBox);
-        Grid.SetColumn(amountPanel, 1);
-        entryGrid.Children.Add(amountPanel);
+        var terminalPanel = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
+        terminalPanel.Children.Add(new TextBlock { Text = "Терминал безнал, ₽", Margin = new Thickness(0, 0, 0, 5) });
+        _terminalAmountBox.FontSize = 17;
+        _terminalAmountBox.ToolTip = "Введите сумму безналичных оплат по терминалу за день.";
+        _terminalAmountBox.KeyDown += AmountBox_KeyDown;
+        terminalPanel.Children.Add(_terminalAmountBox);
+        Grid.SetColumn(terminalPanel, 1);
+        entryGrid.Children.Add(terminalPanel);
+
+        var cashPanel = new StackPanel();
+        cashPanel.Children.Add(new TextBlock { Text = "Касса безнал, ₽", Margin = new Thickness(0, 0, 0, 5) });
+        _cashAmountBox.FontSize = 17;
+        _cashAmountBox.ToolTip = "Введите сумму безнала, пробитую по кассе. Можно использовать запятую или точку.";
+        _cashAmountBox.KeyDown += AmountBox_KeyDown;
+        cashPanel.Children.Add(_cashAmountBox);
+        Grid.SetColumn(cashPanel, 2);
+        entryGrid.Children.Add(cashPanel);
 
         Grid.SetRow(entryGrid, 4);
         root.Children.Add(entryGrid);
@@ -122,8 +134,8 @@ public sealed class ManualDayAddWindow : Window
 
         Loaded += (_, _) =>
         {
-            _amountBox.Focus();
-            _amountBox.SelectAll();
+            _terminalAmountBox.Focus();
+            _terminalAmountBox.SelectAll();
         };
     }
 
@@ -185,24 +197,31 @@ public sealed class ManualDayAddWindow : Window
             return;
         }
 
-        var text = (_amountBox.Text ?? string.Empty)
-            .Replace("\u00A0", string.Empty, StringComparison.Ordinal)
-            .Replace(" ", string.Empty, StringComparison.Ordinal)
-            .Trim();
-
-        if (!decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowLeadingSign, _ru, out var value) &&
-            !decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value))
-        {
-            MessageBox.Show(this, "Сумма введена неверно.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Warning);
-            _amountBox.Focus();
-            _amountBox.SelectAll();
-            return;
-        }
+        if (!TryParseAmount(_terminalAmountBox, "Сумма терминала введена неверно.", out var terminal)) return;
+        if (!TryParseAmount(_cashAmountBox, "Сумма кассы введена неверно.", out var cash)) return;
 
         OrganizationId = organization.Id;
         LocationId = location.Id;
         Date = DateOnly.FromDateTime(selectedDate);
-        Amount = Money.Normalize(value);
+        TerminalAmount = Money.Normalize(terminal);
+        CashAmount = Money.Normalize(cash);
         DialogResult = true;
+    }
+
+    private bool TryParseAmount(TextBox box, string error, out decimal value)
+    {
+        var text = (box.Text ?? string.Empty)
+            .Replace("\u00A0", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .Trim();
+
+        if (decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowLeadingSign, _ru, out value) ||
+            decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value))
+            return true;
+
+        MessageBox.Show(this, error, "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Warning);
+        box.Focus();
+        box.SelectAll();
+        return false;
     }
 }
