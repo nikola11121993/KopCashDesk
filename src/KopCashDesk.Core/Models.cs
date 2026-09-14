@@ -80,7 +80,9 @@ public sealed record PointDaySummary(
     decimal? ShiftCash,
     decimal? ShiftElectronic,
     int ShiftCount,
-    DateTimeOffset? LastShiftClosedAt);
+    DateTimeOffset? LastShiftClosedAt,
+    string FiscalSources = "",
+    bool HasSourceConflict = false);
 
 public enum ReconciliationAllocationKind { Cash, BankReturnCredit }
 
