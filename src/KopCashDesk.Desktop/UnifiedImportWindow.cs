@@ -4,6 +4,7 @@ using KopCashDesk.Core;
 using KopCashDesk.Data;
 using Microsoft.Win32;
 using System.IO.Compression;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -34,8 +35,8 @@ public sealed class UnifiedImportWindow : Window
         public UnifiedImportKind Kind { get; }
         public Guid? OrganizationId { get; set; }
         public Guid? LocationId { get; set; }
-        public string OrganizationName { get; set; } = "";
-        public string LocationName { get; set; } = "";
+        public string OrganizationName { get; set; } = string.Empty;
+        public string LocationName { get; set; } = string.Empty;
         public string FileName => System.IO.Path.GetFileName(Path);
         public string Type => KindText(Kind);
         public string Organization => Kind == UnifiedImportKind.Frontol ? EmptyAsPending(OrganizationName) : "авто";
@@ -51,6 +52,7 @@ public sealed class UnifiedImportWindow : Window
     }
 
     private readonly Database _database;
+    private readonly Guid? _fallbackOrganizationId;
     private readonly Action _afterImport;
     private readonly List<FileItem> _files = [];
     private readonly DataGrid _fileGrid = new();
@@ -61,6 +63,7 @@ public sealed class UnifiedImportWindow : Window
     public UnifiedImportWindow(Database database, Guid? fallbackOrganizationId, Action afterImport)
     {
         _database = database;
+        _fallbackOrganizationId = fallbackOrganizationId;
         _afterImport = afterImport;
 
         Title = "Импорт файлов — Сбер, касса, Frontol, CRPT";
@@ -89,7 +92,7 @@ public sealed class UnifiedImportWindow : Window
         });
         title.Children.Add(new TextBlock
         {
-            Text = "Сбер, Такском и CRPT определяют организацию и точку автоматически. Для каждого Frontol report.txt точка назначается отдельно.",
+            Text = "Сбер, обычный кассовый отчёт Такском и CRPT определяются автоматически. Для каждого Frontol report.txt точка назначается отдельно.",
             Margin = new Thickness(0, 6, 0, 0),
             Foreground = Brushes.DimGray,
             TextWrapping = TextWrapping.Wrap
@@ -133,24 +136,15 @@ public sealed class UnifiedImportWindow : Window
         center.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
 
         ConfigureFileGrid();
-        var listBorder = new System.Windows.Controls.Border
+        center.Children.Add(new Border
         {
             BorderBrush = Brushes.LightGray,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(6),
             Child = _fileGrid
-        };
-        center.Children.Add(listBorder);
+        });
 
-        var resultBorder = new System.Windows.Controls.Border
-        {
-            BorderBrush = Brushes.LightGray,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(14),
-            Margin = new Thickness(12, 0, 0, 0)
-        };
         var resultPanel = new StackPanel();
         resultPanel.Children.Add(new TextBlock
         {
@@ -159,13 +153,21 @@ public sealed class UnifiedImportWindow : Window
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 10)
         });
-        _result.Text = "Добавьте отчёты. Неизвестный формат программа не будет угадывать.";
+        _result.Text = "Добавьте отчёты.";
         _result.TextWrapping = TextWrapping.Wrap;
         resultPanel.Children.Add(_result);
-        resultBorder.Child = new ScrollViewer { Content = resultPanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+
+        var resultBorder = new Border
+        {
+            BorderBrush = Brushes.LightGray,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(14),
+            Margin = new Thickness(12, 0, 0, 0),
+            Child = new ScrollViewer { Content = resultPanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }
+        };
         Grid.SetColumn(resultBorder, 1);
         center.Children.Add(resultBorder);
-
         Grid.SetRow(center, 2);
         root.Children.Add(center);
 
@@ -184,12 +186,7 @@ public sealed class UnifiedImportWindow : Window
             IsEnabled = false
         };
         _importButton.Click += Import_Click;
-        var close = new Button
-        {
-            Content = "Закрыть",
-            Padding = new Thickness(18, 8, 18, 8),
-            IsCancel = true
-        };
+        var close = new Button { Content = "Закрыть", Padding = new Thickness(18, 8, 18, 8), IsCancel = true };
         close.Click += (_, _) => Close();
         buttons.Children.Add(_importButton);
         buttons.Children.Add(close);
@@ -207,10 +204,10 @@ public sealed class UnifiedImportWindow : Window
         _fileGrid.CanUserAddRows = false;
         _fileGrid.CanUserDeleteRows = false;
         _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Файл", Binding = new System.Windows.Data.Binding(nameof(FileItem.FileName)), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
-        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Тип", Binding = new System.Windows.Data.Binding(nameof(FileItem.Type)), Width = 90 });
+        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Тип", Binding = new System.Windows.Data.Binding(nameof(FileItem.Type)), Width = 100 });
         _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Организация", Binding = new System.Windows.Data.Binding(nameof(FileItem.Organization)), Width = 150 });
         _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Торговая точка", Binding = new System.Windows.Data.Binding(nameof(FileItem.Location)), Width = 180 });
-        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Статус", Binding = new System.Windows.Data.Binding(nameof(FileItem.Status)), Width = 170 });
+        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Статус", Binding = new System.Windows.Data.Binding(nameof(FileItem.Status)), Width = 185 });
         _fileGrid.SelectionChanged += (_, _) => UpdateImportEnabled();
         _fileGrid.MouseDoubleClick += (_, _) =>
         {
@@ -266,8 +263,8 @@ public sealed class UnifiedImportWindow : Window
 
         RefreshGrid();
         _result.Text = unknown.Count == 0
-            ? $"Готово к импорту: {_files.Count} файл(а/ов). Frontol назначается по каждому файлу отдельно."
-            : "Не удалось определить тип: " + string.Join(", ", unknown);
+            ? $"Готово к импорту: {_files.Count} файл(а/ов)."
+            : "Не удалось определить тип: " + string.Join(", ", unknown) + ". Если это обычный кассовый отчёт Такском, обновите программу до версии с исправленным распознаванием.";
     }
 
     private void RefreshGrid()
@@ -311,10 +308,10 @@ public sealed class UnifiedImportWindow : Window
         panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(135) });
         panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var orgLabel = new TextBlock { Text = "Организация:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 10) };
         var orgBox = new ComboBox { ItemsSource = organizations, DisplayMemberPath = nameof(Organization.Name), Margin = new Thickness(0, 0, 0, 10) };
-        var locLabel = new TextBlock { Text = "Торговая точка:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 10) };
         var locBox = new ComboBox { DisplayMemberPath = nameof(Location.Name), Margin = new Thickness(0, 0, 0, 10) };
+        var orgLabel = new TextBlock { Text = "Организация:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 10) };
+        var locLabel = new TextBlock { Text = "Торговая точка:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 10) };
         Grid.SetRow(orgLabel, 0); Grid.SetColumn(orgLabel, 0);
         Grid.SetRow(orgBox, 0); Grid.SetColumn(orgBox, 1);
         Grid.SetRow(locLabel, 1); Grid.SetColumn(locLabel, 0);
@@ -326,17 +323,24 @@ public sealed class UnifiedImportWindow : Window
             var org = orgBox.SelectedItem as Organization;
             var locations = org is null
                 ? Array.Empty<Location>()
-                : _database.Locations().Where(x => x.OrganizationId == org.Id && !x.IsExcluded).OrderBy(x => x.Name).ToArray();
+                : _database.Locations().Where(x => x.OrganizationId == org.Id && x.IsActive).OrderBy(x => x.Name).ToArray();
             locBox.ItemsSource = locations;
             if (item.LocationId is Guid current) locBox.SelectedItem = locations.FirstOrDefault(x => x.Id == current);
+            if (locBox.SelectedItem is null) locBox.SelectedItem = locations.FirstOrDefault();
         }
+
         orgBox.SelectionChanged += (_, _) => RefreshLocations();
-        if (item.OrganizationId is Guid orgId) orgBox.SelectedItem = organizations.FirstOrDefault(x => x.Id == orgId);
+        if (item.OrganizationId is Guid orgId)
+            orgBox.SelectedItem = organizations.FirstOrDefault(x => x.Id == orgId);
+        else if (_fallbackOrganizationId is Guid fallback)
+            orgBox.SelectedItem = organizations.FirstOrDefault(x => x.Id == fallback);
+        else
+            orgBox.SelectedItem = organizations.FirstOrDefault();
         RefreshLocations();
 
         var hint = new TextBlock
         {
-            Text = "Это назначение применяется только к выбранному report.txt. Другие Frontol-файлы назначаются отдельно.",
+            Text = "Это назначение применяется только к выбранному report.txt.",
             Foreground = Brushes.DimGray,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 4, 0, 14)
@@ -379,9 +383,9 @@ public sealed class UnifiedImportWindow : Window
     {
         if (!_importButton.IsEnabled) return;
         var files = _files.ToArray();
-
         _importButton.IsEnabled = false;
         _result.Text = "Импортирую файлы...";
+
         try
         {
             var text = await Task.Run(() =>
@@ -398,7 +402,7 @@ public sealed class UnifiedImportWindow : Window
                 var taxcom = files.Where(x => x.Kind == UnifiedImportKind.Taxcom).Select(x => x.Path).ToArray();
                 if (taxcom.Length > 0)
                 {
-                    var summary = new TaxcomShiftReportImporter(_database).ImportFiles(taxcom);
+                    var summary = new TaxcomShiftReportImporter(_database, _fallbackOrganizationId).ImportFiles(taxcom);
                     result.Add("ТАКСКОМ\n" + summary.ToDisplayText());
                 }
 
@@ -415,8 +419,7 @@ public sealed class UnifiedImportWindow : Window
                 {
                     var summary = new FrontolReportImporter(_database, group.Key.OrganizationId, group.Key.LocationId)
                         .ImportFiles(group.Select(x => x.Path));
-                    var point = group.First().LocationName;
-                    result.Add($"FRONTOL — {point}\n" + summary.ToDisplayText());
+                    result.Add($"FRONTOL — {group.First().LocationName}\n" + summary.ToDisplayText());
                 }
 
                 var matching = _database.RebuildCrossSourceShiftMatches();
@@ -448,45 +451,30 @@ public sealed class UnifiedImportWindow : Window
             {
                 using var stream = File.OpenRead(path);
                 Span<byte> header = stackalloc byte[4];
-                return stream.Read(header) == 4 &&
-                       header[0] == (byte)'C' && header[1] == (byte)'R' &&
-                       header[2] == (byte)'P' && header[3] == (byte)'T'
+                return stream.Read(header) == 4 && header.SequenceEqual("CRPT"u8)
                     ? UnifiedImportKind.Crpt
                     : UnifiedImportKind.Unknown;
             }
 
-            if (extension == ".txt")
-            {
-                using var reader = new StreamReader(path);
-                for (var i = 0; i < 50 && !reader.EndOfStream; i++)
-                {
-                    var line = reader.ReadLine();
-                    if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
-                    var fields = line.Split(';');
-                    if (fields.Length >= 14 && int.TryParse(fields[3], out var transactionType) &&
-                        transactionType is 40 or 55 or 56 or 61)
-                        return UnifiedImportKind.Frontol;
-                }
-                return UnifiedImportKind.Unknown;
-            }
+            if (extension == ".txt") return LooksLikeFrontol(path) ? UnifiedImportKind.Frontol : UnifiedImportKind.Unknown;
 
             if (extension == ".xlsx")
             {
                 using var stream = File.OpenRead(path);
-                return DetectWorkbook(stream);
+                return DetectWorkbook(stream, System.IO.Path.GetFileName(path));
             }
 
             if (extension == ".zip")
             {
                 using var archive = ZipFile.OpenRead(path);
                 var detected = new HashSet<UnifiedImportKind>();
-                foreach (var entry in archive.Entries.Where(x => x.FullName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)).Take(20))
+                foreach (var entry in archive.Entries.Where(x => x.FullName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)).Take(50))
                 {
                     using var input = entry.Open();
                     using var memory = new MemoryStream();
                     input.CopyTo(memory);
                     memory.Position = 0;
-                    var kind = DetectWorkbook(memory);
+                    var kind = DetectWorkbook(memory, entry.Name);
                     if (kind != UnifiedImportKind.Unknown) detected.Add(kind);
                 }
                 return detected.Count == 1 ? detected.Single() : UnifiedImportKind.Unknown;
@@ -500,7 +488,22 @@ public sealed class UnifiedImportWindow : Window
         return UnifiedImportKind.Unknown;
     }
 
-    private static UnifiedImportKind DetectWorkbook(Stream stream)
+    private static bool LooksLikeFrontol(string path)
+    {
+        using var reader = new StreamReader(path);
+        for (var i = 0; i < 200 && !reader.EndOfStream; i++)
+        {
+            var line = reader.ReadLine();
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+            var fields = line.Split(';');
+            if (fields.Length < 14) continue;
+            if (int.TryParse(fields.ElementAtOrDefault(3), out var transactionType) && transactionType is 40 or 55 or 56 or 61)
+                return true;
+        }
+        return false;
+    }
+
+    private static UnifiedImportKind DetectWorkbook(Stream stream, string fileName)
     {
         using var document = SpreadsheetDocument.Open(stream, false);
         var workbookPart = document.WorkbookPart;
@@ -510,7 +513,7 @@ public sealed class UnifiedImportWindow : Window
             .Elements<SharedStringItem>().Select(x => x.InnerText).ToArray() ?? [];
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var sheet in workbookPart.Workbook.Sheets.Elements<Sheet>().Take(12))
+        foreach (var sheet in workbookPart.Workbook.Sheets.Elements<Sheet>().Take(20))
         {
             var id = sheet.Id?.Value;
             if (string.IsNullOrWhiteSpace(id)) continue;
@@ -518,23 +521,38 @@ public sealed class UnifiedImportWindow : Window
             var data = worksheetPart.Worksheet.GetFirstChild<SheetData>();
             if (data is null) continue;
 
-            foreach (var row in data.Elements<Row>().Take(50))
+            foreach (var row in data.Elements<Row>().Take(100))
             {
                 foreach (var cell in row.Elements<Cell>())
                 {
-                    var value = ReadCell(cell, shared).Trim();
+                    var value = NormalizeToken(ReadCell(cell, shared));
                     if (!string.IsNullOrWhiteSpace(value)) seen.Add(value);
                 }
             }
         }
 
-        string[] taxcom = ["Дата закрытия", "№ смены", "Выручка нал.", "Выручка безнал.", "Название ККТ", "Зав. № ФН"];
-        if (taxcom.All(seen.Contains)) return UnifiedImportKind.Taxcom;
+        var taxcomCore = new[] { "дата закрытия", "№ смены", "выручка нал.", "выручка безнал." };
+        var taxcomIdentity = new[] { "название ккт", "зав. № фн", "рег. № ккт", "зав. № ккт" };
+        var taxcomTitle = seen.Contains("такском-касса") ||
+                          seen.Contains("сводный отчет по сменам") ||
+                          NormalizeToken(fileName).Contains("сводный отчет по сменам", StringComparison.Ordinal);
+        if (taxcomCore.All(seen.Contains) && (taxcomTitle || taxcomIdentity.Any(seen.Contains)))
+            return UnifiedImportKind.Taxcom;
 
-        string[] sber = ["Наименование юридического лица", "ИНН", "Наименование ТСТ", "Номер терминала", "RRN", "Дата операции", "Сумма операции"];
-        if (sber.All(seen.Contains)) return UnifiedImportKind.Sber;
+        var sberCore = new[] { "инн", "наименование тст", "номер терминала", "дата операции", "сумма операции" };
+        var sberMarker = seen.Contains("наименование юридического лица") || seen.Contains("rrn");
+        if (sberCore.All(seen.Contains) && sberMarker)
+            return UnifiedImportKind.Sber;
 
         return UnifiedImportKind.Unknown;
+    }
+
+    private static string NormalizeToken(string value)
+    {
+        var text = (value ?? string.Empty).Replace('\u00A0', ' ').Trim().ToLowerInvariant();
+        text = Regex.Replace(text, @"\s+", " ");
+        text = text.Replace('ё', 'е');
+        return text;
     }
 
     private static string ReadCell(Cell cell, string[] shared)
