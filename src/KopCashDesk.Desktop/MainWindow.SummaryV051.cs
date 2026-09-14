@@ -42,6 +42,14 @@ public partial class MainWindow
         filters.Children.Add(monthBox);
         filters.Children.Add(new TextBlock { Text = "Точка:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0) });
         filters.Children.Add(locationBox);
+        var addDayButton = new Button
+        {
+            Content = "+ Добавить день вручную",
+            Padding = new Thickness(12, 5, 12, 5),
+            ToolTip = "Добавить дату и сумму кассы без загрузки отчёта Taxcom/Frontol"
+        };
+        addDayButton.Click += (_, _) => AddManualDay();
+        filters.Children.Add(addDayButton);
         root.Children.Add(filters);
 
         var totals = new TextBlock { FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 14), TextWrapping = TextWrapping.Wrap };
@@ -112,6 +120,75 @@ public partial class MainWindow
                 StatusText.Text = $"{row.Point}: касса за {row.Date} вручную = {value:N2} ₽";
             }
             RefreshData();
+        }
+
+        void AddManualDay()
+        {
+            var selectedLocationId = (locationBox.SelectedItem as LocationOption)?.Id;
+            var selectedYear = yearBox.SelectedItem is int year ? year : DateTime.Today.Year;
+            var selectedMonth = (monthBox.SelectedItem as MonthOption)?.Number ?? DateTime.Today.Month;
+            var today = DateTime.Today;
+            var preferredDay = selectedYear == today.Year && selectedMonth == today.Month ? today.Day : 1;
+            var preferredDate = new DateOnly(selectedYear, selectedMonth, preferredDay);
+
+            var allowedOrganizations = _organizations
+                .Where(x => SelectedOrganizationId is null || x.Id == SelectedOrganizationId)
+                .ToArray();
+            var allowedOrganizationIds = allowedOrganizations.Select(x => x.Id).ToHashSet();
+            var allowedLocations = _locations.Where(x => allowedOrganizationIds.Contains(x.OrganizationId)).ToArray();
+
+            if (allowedOrganizations.Length == 0 || allowedLocations.Length == 0)
+            {
+                MessageBox.Show(this, "Нет доступной организации или торговой точки.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dialog = new ManualDayAddWindow(
+                allowedOrganizations,
+                allowedLocations,
+                SelectedOrganizationId,
+                selectedLocationId,
+                preferredDate)
+            {
+                Owner = this
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            var alreadyManual = _db.ManualCashPostings(dialog.OrganizationId, dialog.Date.Year, dialog.Date.Month, dialog.LocationId)
+                .Any(x => x.Date == dialog.Date);
+            var existing = _db.CanonicalPointDaySummaries(dialog.OrganizationId, dialog.Date.Year, dialog.Date.Month, dialog.LocationId)
+                .FirstOrDefault(x => x.Date == dialog.Date);
+
+            if (alreadyManual)
+            {
+                var answer = MessageBox.Show(this,
+                    $"За {dialog.Date:dd.MM.yyyy} уже есть ручная сумма. Заменить её на {dialog.Amount:N2} ₽?",
+                    "КОП Кассы", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (answer != MessageBoxResult.Yes) return;
+            }
+            else if (existing is not null && (existing.FiscalElectronic is not null || existing.ShiftCount > 0))
+            {
+                var answer = MessageBox.Show(this,
+                    $"За {dialog.Date:dd.MM.yyyy} уже есть импортированные кассовые данные.\n\nСохранить {dialog.Amount:N2} ₽ как ручную корректировку? Исходные отчёты останутся в базе.",
+                    "Ручная корректировка кассы", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (answer != MessageBoxResult.Yes) return;
+            }
+
+            _db.SetManualCash(dialog.OrganizationId, dialog.LocationId, dialog.Date, dialog.Amount);
+            var point = _locations.FirstOrDefault(x => x.Id == dialog.LocationId)?.Name ?? "Точка";
+            StatusText.Text = $"{point}: {dialog.Date:dd.MM.yyyy} добавлен вручную, касса безнал {dialog.Amount:N2} ₽. Отчёт не импортировался.";
+
+            if (years.Contains(dialog.Date.Year))
+                yearBox.SelectedItem = dialog.Date.Year;
+            var monthOption = monthOptions.FirstOrDefault(x => x.Number == dialog.Date.Month);
+            if (monthOption is not null) monthBox.SelectedItem = monthOption;
+            var locationOption = locationOptions.FirstOrDefault(x => x.Id == dialog.LocationId);
+            if (locationOption is not null) locationBox.SelectedItem = locationOption;
+
+            if (!years.Contains(dialog.Date.Year))
+                PageContent.Content = RenderSummaryV051();
+            else
+                RefreshData();
         }
 
         dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash);
