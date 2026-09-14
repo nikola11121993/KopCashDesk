@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 
 namespace KopCashDesk.Desktop;
 
@@ -218,7 +219,8 @@ public partial class MainWindow
     private static DataGrid BuildDailySummaryGrid(
         Action<DaySummaryRow, bool> toggleSberCopy,
         Action<DaySummaryRow> editManualCash,
-        Action<DaySummaryRow>? editManualTerminal = null)
+        Action<DaySummaryRow>? editManualTerminal = null,
+        Action<DaySummaryRow>? deleteManualDay = null)
     {
         var grid = new DataGrid
         {
@@ -266,6 +268,15 @@ public partial class MainWindow
                 editManualTerminal(row);
         };
 
+        grid.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Delete && deleteManualDay is not null && grid.SelectedItem is DaySummaryRow row)
+            {
+                deleteManualDay(row);
+                e.Handled = true;
+            }
+        };
+
         var menu = new ContextMenu();
         if (editManualTerminal is not null)
         {
@@ -290,6 +301,17 @@ public partial class MainWindow
             if (grid.SelectedItem is DaySummaryRow row) toggleSberCopy(row, true);
         };
         menu.Items.Add(copy);
+
+        if (deleteManualDay is not null)
+        {
+            menu.Items.Add(new Separator());
+            var delete = new MenuItem { Header = "Удалить ручные данные за день" };
+            delete.Click += (_, _) =>
+            {
+                if (grid.SelectedItem is DaySummaryRow row) deleteManualDay(row);
+            };
+            menu.Items.Add(delete);
+        }
         grid.ContextMenu = menu;
 
         return grid;
