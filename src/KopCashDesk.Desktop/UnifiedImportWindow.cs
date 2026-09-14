@@ -17,6 +17,7 @@ public enum UnifiedImportKind
     Unknown,
     Sber,
     Taxcom,
+    TaxcomFiscalDocuments,
     Frontol,
     Crpt
 }
@@ -92,7 +93,7 @@ public sealed class UnifiedImportWindow : Window
         });
         title.Children.Add(new TextBlock
         {
-            Text = "Сбер, обычный кассовый отчёт Такском и CRPT определяются автоматически. Для каждого Frontol report.txt точка назначается отдельно.",
+            Text = "Сбер, отчёты Такском по сменам и фискальным документам, а также CRPT определяются автоматически. Для каждого Frontol report.txt точка назначается отдельно.",
             Margin = new Thickness(0, 6, 0, 0),
             Foreground = Brushes.DimGray,
             TextWrapping = TextWrapping.Wrap
@@ -204,7 +205,7 @@ public sealed class UnifiedImportWindow : Window
         _fileGrid.CanUserAddRows = false;
         _fileGrid.CanUserDeleteRows = false;
         _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Файл", Binding = new System.Windows.Data.Binding(nameof(FileItem.FileName)), Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
-        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Тип", Binding = new System.Windows.Data.Binding(nameof(FileItem.Type)), Width = 100 });
+        _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Тип", Binding = new System.Windows.Data.Binding(nameof(FileItem.Type)), Width = 145 });
         _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Организация", Binding = new System.Windows.Data.Binding(nameof(FileItem.Organization)), Width = 150 });
         _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Торговая точка", Binding = new System.Windows.Data.Binding(nameof(FileItem.Location)), Width = 180 });
         _fileGrid.Columns.Add(new DataGridTextColumn { Header = "Статус", Binding = new System.Windows.Data.Binding(nameof(FileItem.Status)), Width = 185 });
@@ -264,7 +265,7 @@ public sealed class UnifiedImportWindow : Window
         RefreshGrid();
         _result.Text = unknown.Count == 0
             ? $"Готово к импорту: {_files.Count} файл(а/ов)."
-            : "Не удалось определить тип: " + string.Join(", ", unknown) + ". Если это обычный кассовый отчёт Такском, обновите программу до версии с исправленным распознаванием.";
+            : "Не удалось определить тип: " + string.Join(", ", unknown) + ".";
     }
 
     private void RefreshGrid()
@@ -403,7 +404,14 @@ public sealed class UnifiedImportWindow : Window
                 if (taxcom.Length > 0)
                 {
                     var summary = new TaxcomShiftReportImporter(_database, _fallbackOrganizationId).ImportFiles(taxcom);
-                    result.Add("ТАКСКОМ\n" + summary.ToDisplayText());
+                    result.Add("ТАКСКОМ — СМЕНЫ\n" + summary.ToDisplayText());
+                }
+
+                var taxcomDocuments = files.Where(x => x.Kind == UnifiedImportKind.TaxcomFiscalDocuments).Select(x => x.Path).ToArray();
+                if (taxcomDocuments.Length > 0)
+                {
+                    var summary = new TaxcomFiscalDocumentImporter(_database, _fallbackOrganizationId).ImportFiles(taxcomDocuments);
+                    result.Add("ТАКСКОМ — ФИСКАЛЬНЫЕ ДОКУМЕНТЫ\n" + summary.ToDisplayText());
                 }
 
                 var crpt = files.Where(x => x.Kind == UnifiedImportKind.Crpt).Select(x => x.Path).ToArray();
@@ -521,7 +529,7 @@ public sealed class UnifiedImportWindow : Window
             var data = worksheetPart.Worksheet.GetFirstChild<SheetData>();
             if (data is null) continue;
 
-            foreach (var row in data.Elements<Row>().Take(100))
+            foreach (var row in data.Elements<Row>().Take(120))
             {
                 foreach (var cell in row.Elements<Cell>())
                 {
@@ -531,11 +539,19 @@ public sealed class UnifiedImportWindow : Window
             }
         }
 
+        var normalizedName = NormalizeToken(fileName);
+        var fiscalDocumentCore = new[] { "дата и время", "документ", "тип операции", "наличными", "безналичными", "сумма" };
+        var fiscalDocumentIdentity = new[] { "№ фд", "фпд", "название ккт", "зав. № ккт", "рег. № ккт", "зав. № фн" };
+        var fiscalDocumentTitle = seen.Contains("сводный отчет по фискальным документам") ||
+                                  normalizedName.Contains("сводный отчет по фискальным документам", StringComparison.Ordinal);
+        if (fiscalDocumentCore.All(seen.Contains) && (fiscalDocumentTitle || fiscalDocumentIdentity.Count(seen.Contains) >= 3))
+            return UnifiedImportKind.TaxcomFiscalDocuments;
+
         var taxcomCore = new[] { "дата закрытия", "№ смены", "выручка нал.", "выручка безнал." };
         var taxcomIdentity = new[] { "название ккт", "зав. № фн", "рег. № ккт", "зав. № ккт" };
         var taxcomTitle = seen.Contains("такском-касса") ||
                           seen.Contains("сводный отчет по сменам") ||
-                          NormalizeToken(fileName).Contains("сводный отчет по сменам", StringComparison.Ordinal);
+                          normalizedName.Contains("сводный отчет по сменам", StringComparison.Ordinal);
         if (taxcomCore.All(seen.Contains) && (taxcomTitle || taxcomIdentity.Any(seen.Contains)))
             return UnifiedImportKind.Taxcom;
 
@@ -569,7 +585,8 @@ public sealed class UnifiedImportWindow : Window
     private static string KindText(UnifiedImportKind kind) => kind switch
     {
         UnifiedImportKind.Sber => "Сбер",
-        UnifiedImportKind.Taxcom => "Такском",
+        UnifiedImportKind.Taxcom => "Такском — смены",
+        UnifiedImportKind.TaxcomFiscalDocuments => "Такском — чеки",
         UnifiedImportKind.Frontol => "Frontol",
         UnifiedImportKind.Crpt => "CRPT",
         _ => "Неизвестно"
