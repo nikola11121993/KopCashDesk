@@ -18,7 +18,7 @@ public partial class MainWindow
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        var allRows = _db.PointDaySummaries(SelectedOrganizationId);
+        var allRows = _db.CanonicalPointDaySummaries(SelectedOrganizationId);
         var years = allRows.Select(x => x.Date.Year).Distinct().OrderByDescending(x => x).ToList();
         if (years.Count == 0) years.Add(DateTime.Today.Year);
 
@@ -59,6 +59,13 @@ public partial class MainWindow
             if (row.Sber is null)
             {
                 MessageBox.Show(this, "За этот день нет суммы Сбера.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+                RefreshData();
+                return;
+            }
+
+            if (row.Status.Contains("Конфликт кассовых источников", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(this, "За этот день есть конфликт Taxcom/Frontol. Сначала проверьте кассовые источники.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Warning);
                 RefreshData();
                 return;
             }
@@ -120,7 +127,7 @@ public partial class MainWindow
             if (yearBox.SelectedItem is not int year) return;
             var month = (monthBox.SelectedItem as MonthOption)?.Number;
             var locationId = (locationBox.SelectedItem as LocationOption)?.Id;
-            var rows = _db.PointDaySummaries(SelectedOrganizationId, year, month, locationId);
+            var rows = _db.CanonicalPointDaySummaries(SelectedOrganizationId, year, month, locationId);
             var manual = _db.ManualCashPostings(SelectedOrganizationId, year, month, locationId)
                 .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
 
@@ -134,12 +141,17 @@ public partial class MainWindow
                     var bank = SumNullable(g.Select(x => x.Sber));
                     var cash = SumNullable(g.Select(x => x.CashElectronic));
                     var shiftTotal = SumNullable(g.Select(x => x.ShiftTotal));
+                    var hasConflict = g.Any(x => x.Status.Contains("Конфликт кассовых источников", StringComparison.OrdinalIgnoreCase));
                     var missingCash = g.Any(x => x.Sber is not null && x.CashElectronic is null);
                     var missingBank = g.Any(x => x.Sber is null && x.CashElectronic is not null);
-                    var complete = !missingCash && !missingBank;
+                    var complete = !missingCash && !missingBank && !hasConflict;
                     var difference = complete && bank is not null && cash is not null ? cash - bank : null;
                     var lastClosed = g.Where(x => x.LastClosedAt is not null).Select(x => x.LastClosedAt).Max();
-                    var status = complete ? SummaryStatus(bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), difference, g.Any(x => x.CashFromSber)) : "Неполные данные";
+                    var status = hasConflict
+                        ? "Конфликт кассовых источников — требуется проверка"
+                        : complete
+                            ? SummaryStatus(bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), difference, g.Any(x => x.CashFromSber))
+                            : "Неполные данные";
                     return new MonthSummaryRow(g.Key.Year, g.Key.Month, g.Key.OrganizationId, g.Key.LocationId, g.Key.Organization, g.Key.Point,
                         bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), lastClosed, difference, status);
                 })
@@ -150,10 +162,12 @@ public partial class MainWindow
             var cashTotal = SumNullable(dayRows.Select(x => x.CashElectronic));
             var shiftGrandTotal = SumNullable(dayRows.Select(x => x.ShiftTotal));
             var incompleteDays = dayRows.Count(x => (x.Sber is null) != (x.CashElectronic is null));
+            var conflictDays = dayRows.Count(x => x.Status.Contains("Конфликт кассовых источников", StringComparison.OrdinalIgnoreCase));
             var manualDays = manual.Count;
             totals.Text = $"Сбер за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
                           (manualDays > 0 ? $"     •     Ручных корректировок: {manualDays}" : "") +
-                          (incompleteDays > 0 ? $"     •     Неполных дней: {incompleteDays}" : "");
+                          (incompleteDays > 0 ? $"     •     Неполных дней: {incompleteDays}" : "") +
+                          (conflictDays > 0 ? $"     •     Конфликтов источников: {conflictDays}" : "");
         }
 
         yearBox.SelectionChanged += (_, _) => RefreshData();
@@ -169,15 +183,21 @@ public partial class MainWindow
     {
         var hasManual = manual.TryGetValue((row.OrganizationId, row.LocationId, row.Date), out var manualElectronic);
         var cash = hasManual ? manualElectronic : row.FiscalElectronic;
-        var copied = hasManual && row.BankElectronic is not null && manualElectronic == row.BankElectronic.Value;
-        var difference = row.BankElectronic is not null && cash is not null ? cash - row.BankElectronic : null;
-        var status = SummaryStatus(row.BankElectronic, cash, row.ShiftTotal, row.ShiftCount, difference, copied);
+        var copied = !row.HasSourceConflict && hasManual && row.BankElectronic is not null && manualElectronic == row.BankElectronic.Value;
+        var difference = !row.HasSourceConflict && row.BankElectronic is not null && cash is not null ? cash - row.BankElectronic : null;
+        var status = row.HasSourceConflict
+            ? $"Конфликт кассовых источников — требуется проверка{SourceSuffix(row.FiscalSources)}"
+            : SummaryStatus(row.BankElectronic, cash, row.ShiftTotal, row.ShiftCount, difference, copied) + SourceSuffix(row.FiscalSources);
         if (hasManual && !copied) status += " — ручная корректировка";
 
         return new DaySummaryRow(
             row.Date, row.OrganizationId, row.LocationId, row.Organization, row.Location,
             row.BankElectronic, cash, row.FiscalElectronic is not null, copied,
-            row.BankElectronic is not null, row.ShiftTotal, row.ShiftCount, row.LastShiftClosedAt,
+            row.BankElectronic is not null && !row.HasSourceConflict,
+            row.ShiftTotal, row.ShiftCount, row.LastShiftClosedAt,
             difference, status);
     }
+
+    private static string SourceSuffix(string sources) =>
+        string.IsNullOrWhiteSpace(sources) ? string.Empty : $" — {sources}";
 }
