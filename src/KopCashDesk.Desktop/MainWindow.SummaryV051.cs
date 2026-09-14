@@ -46,7 +46,7 @@ public partial class MainWindow
         {
             Content = "+ Добавить день вручную",
             Padding = new Thickness(12, 5, 12, 5),
-            ToolTip = "Добавить дату и сумму кассы без загрузки отчёта Taxcom/Frontol"
+            ToolTip = "Добавить дату, сумму терминала и сумму кассы без загрузки отчётов"
         };
         filters.Children.Add(addDayButton);
         root.Children.Add(filters);
@@ -58,14 +58,14 @@ public partial class MainWindow
         DataGrid dailyGrid = null!;
         DataGrid monthlyGrid = null!;
 
-        bool HasManual(DaySummaryRow row) => _db.ManualCashPostings(row.OrganizationId, row.DateValue.Year, row.DateValue.Month, row.LocationId)
+        bool HasManualCash(DaySummaryRow row) => _db.ManualCashPostings(row.OrganizationId, row.DateValue.Year, row.DateValue.Month, row.LocationId)
             .Any(x => x.Date == row.DateValue);
 
         void ToggleSberCopy(DaySummaryRow row, bool isChecked)
         {
             if (row.Sber is null)
             {
-                MessageBox.Show(this, "За этот день нет суммы Сбера.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(this, "За этот день нет суммы терминала.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
                 RefreshData();
                 return;
             }
@@ -77,11 +77,11 @@ public partial class MainWindow
                 return;
             }
 
-            var hasManual = HasManual(row);
+            var hasManual = HasManualCash(row);
             if (isChecked && row.HasActualFiscal && !hasManual)
             {
                 var answer = MessageBox.Show(this,
-                    "За этот день уже есть кассовый отчёт.\n\nПоставить сумму Сбера как ручную корректировку? Исходный отчёт останется в базе, а снятие галочки вернёт его сумму.",
+                    "За этот день уже есть кассовый отчёт.\n\nПоставить сумму терминала как ручную корректировку кассы? Исходный отчёт останется в базе, а снятие галочки вернёт его сумму.",
                     "Ручная корректировка кассы", MessageBoxButton.YesNo, MessageBoxImage.Question);
                 if (answer != MessageBoxResult.Yes)
                 {
@@ -98,7 +98,7 @@ public partial class MainWindow
             else
             {
                 _db.ClearManualCash(row.OrganizationId, row.LocationId, row.DateValue);
-                StatusText.Text = $"{row.Point}: ручная корректировка за {row.Date} снята";
+                StatusText.Text = $"{row.Point}: ручная корректировка кассы за {row.Date} снята";
             }
             RefreshData();
         }
@@ -111,12 +111,36 @@ public partial class MainWindow
             if (dialog.ClearRequested)
             {
                 _db.ClearManualCash(row.OrganizationId, row.LocationId, row.DateValue);
-                StatusText.Text = $"{row.Point}: ручная корректировка за {row.Date} очищена";
+                StatusText.Text = $"{row.Point}: ручная корректировка кассы за {row.Date} очищена";
             }
             else if (dialog.Value is decimal value)
             {
                 _db.SetManualCash(row.OrganizationId, row.LocationId, row.DateValue, value);
                 StatusText.Text = $"{row.Point}: касса за {row.Date} вручную = {value:N2} ₽";
+            }
+            RefreshData();
+        }
+
+        void EditManualTerminal(DaySummaryRow row)
+        {
+            var dialog = new ManualCashEditWindow(
+                row.Point,
+                row.DateValue,
+                row.Sber,
+                "Терминал — ручная сумма",
+                "Терминал безнал:")
+            { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+
+            if (dialog.ClearRequested)
+            {
+                _db.ClearManualTerminal(row.OrganizationId, row.LocationId, row.DateValue);
+                StatusText.Text = $"{row.Point}: ручная сумма терминала за {row.Date} очищена";
+            }
+            else if (dialog.Value is decimal value)
+            {
+                _db.SetManualTerminal(row.OrganizationId, row.LocationId, row.DateValue, value);
+                StatusText.Text = $"{row.Point}: терминал за {row.Date} вручную = {value:N2} ₽";
             }
             RefreshData();
         }
@@ -153,29 +177,32 @@ public partial class MainWindow
             };
             if (dialog.ShowDialog() != true) return;
 
-            var alreadyManual = _db.ManualCashPostings(dialog.OrganizationId, dialog.Date.Year, dialog.Date.Month, dialog.LocationId)
+            var alreadyManualCash = _db.ManualCashPostings(dialog.OrganizationId, dialog.Date.Year, dialog.Date.Month, dialog.LocationId)
+                .Any(x => x.Date == dialog.Date);
+            var alreadyManualTerminal = _db.ManualTerminalPostings(dialog.OrganizationId, dialog.Date.Year, dialog.Date.Month, dialog.LocationId)
                 .Any(x => x.Date == dialog.Date);
             var existing = _db.CanonicalPointDaySummaries(dialog.OrganizationId, dialog.Date.Year, dialog.Date.Month, dialog.LocationId)
                 .FirstOrDefault(x => x.Date == dialog.Date);
 
-            if (alreadyManual)
+            if (alreadyManualCash || alreadyManualTerminal)
             {
                 var answer = MessageBox.Show(this,
-                    $"За {dialog.Date:dd.MM.yyyy} уже есть ручная сумма. Заменить её на {dialog.Amount:N2} ₽?",
+                    $"За {dialog.Date:dd.MM.yyyy} уже есть ручные данные.\n\nЗаменить их?\nТерминал: {dialog.TerminalAmount:N2} ₽\nКасса безнал: {dialog.CashAmount:N2} ₽",
                     "КОП Кассы", MessageBoxButton.YesNo, MessageBoxImage.Question);
                 if (answer != MessageBoxResult.Yes) return;
             }
-            else if (existing is not null && (existing.FiscalElectronic is not null || existing.ShiftCount > 0))
+            else if (existing is not null && (existing.BankElectronic is not null || existing.FiscalElectronic is not null || existing.ShiftCount > 0))
             {
                 var answer = MessageBox.Show(this,
-                    $"За {dialog.Date:dd.MM.yyyy} уже есть импортированные кассовые данные.\n\nСохранить {dialog.Amount:N2} ₽ как ручную корректировку? Исходные отчёты останутся в базе.",
-                    "Ручная корректировка кассы", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    $"За {dialog.Date:dd.MM.yyyy} уже есть импортированные данные.\n\nСохранить ручные значения? Исходные отчёты останутся в базе.\n\nТерминал: {dialog.TerminalAmount:N2} ₽\nКасса безнал: {dialog.CashAmount:N2} ₽",
+                    "Ручная корректировка дня", MessageBoxButton.YesNo, MessageBoxImage.Question);
                 if (answer != MessageBoxResult.Yes) return;
             }
 
-            _db.SetManualCash(dialog.OrganizationId, dialog.LocationId, dialog.Date, dialog.Amount);
+            _db.SetManualTerminal(dialog.OrganizationId, dialog.LocationId, dialog.Date, dialog.TerminalAmount);
+            _db.SetManualCash(dialog.OrganizationId, dialog.LocationId, dialog.Date, dialog.CashAmount);
             var point = _locations.FirstOrDefault(x => x.Id == dialog.LocationId)?.Name ?? "Точка";
-            StatusText.Text = $"{point}: {dialog.Date:dd.MM.yyyy} добавлен вручную, касса безнал {dialog.Amount:N2} ₽. Отчёт не импортировался.";
+            StatusText.Text = $"{point}: {dialog.Date:dd.MM.yyyy} добавлен вручную. Терминал {dialog.TerminalAmount:N2} ₽, касса {dialog.CashAmount:N2} ₽.";
 
             if (years.Contains(dialog.Date.Year))
                 yearBox.SelectedItem = dialog.Date.Year;
@@ -190,7 +217,7 @@ public partial class MainWindow
                 RefreshData();
         }
 
-        dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash);
+        dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash, EditManualTerminal);
         monthlyGrid = BuildMonthlySummaryGrid();
         addDayButton.Click += (_, _) => AddManualDay();
         var tabs = new TabControl();
@@ -205,10 +232,12 @@ public partial class MainWindow
             var month = (monthBox.SelectedItem as MonthOption)?.Number;
             var locationId = (locationBox.SelectedItem as LocationOption)?.Id;
             var rows = _db.CanonicalPointDaySummaries(SelectedOrganizationId, year, month, locationId);
-            var manual = _db.ManualCashPostings(SelectedOrganizationId, year, month, locationId)
+            var manualCash = _db.ManualCashPostings(SelectedOrganizationId, year, month, locationId)
+                .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
+            var manualTerminal = _db.ManualTerminalPostings(SelectedOrganizationId, year, month, locationId)
                 .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
 
-            var dayRows = rows.Select(x => ToDayRowV051(x, manual)).OrderByDescending(x => x.DateValue).ThenBy(x => x.Point).ToArray();
+            var dayRows = rows.Select(x => ToDayRowV051(x, manualCash, manualTerminal)).OrderByDescending(x => x.DateValue).ThenBy(x => x.Point).ToArray();
             dailyGrid.ItemsSource = dayRows;
 
             var monthRows = dayRows
@@ -240,9 +269,9 @@ public partial class MainWindow
             var shiftGrandTotal = SumNullable(dayRows.Select(x => x.ShiftTotal));
             var incompleteDays = dayRows.Count(x => (x.Sber is null) != (x.CashElectronic is null));
             var conflictDays = dayRows.Count(x => x.Status.Contains("Конфликт кассовых источников", StringComparison.OrdinalIgnoreCase));
-            var manualDays = manual.Count;
-            totals.Text = $"Сбер за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
-                          (manualDays > 0 ? $"     •     Ручных корректировок: {manualDays}" : "") +
+            var manualDays = manualCash.Keys.Concat(manualTerminal.Keys).Distinct().Count();
+            totals.Text = $"Терминал за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
+                          (manualDays > 0 ? $"     •     Ручных дней: {manualDays}" : "") +
                           (incompleteDays > 0 ? $"     •     Неполных дней: {incompleteDays}" : "") +
                           (conflictDays > 0 ? $"     •     Конфликтов источников: {conflictDays}" : "");
         }
@@ -256,16 +285,20 @@ public partial class MainWindow
 
     private static DaySummaryRow ToDayRowV051(
         PointDaySummary row,
-        IReadOnlyDictionary<(Guid OrganizationId, Guid LocationId, DateOnly Date), decimal> manual)
+        IReadOnlyDictionary<(Guid OrganizationId, Guid LocationId, DateOnly Date), decimal> manualCash,
+        IReadOnlyDictionary<(Guid OrganizationId, Guid LocationId, DateOnly Date), decimal> manualTerminal)
     {
-        var hasManual = manual.TryGetValue((row.OrganizationId, row.LocationId, row.Date), out var manualElectronic);
-        var cash = hasManual ? manualElectronic : row.FiscalElectronic;
-        var copied = !row.HasSourceConflict && hasManual && row.BankElectronic is not null && manualElectronic == row.BankElectronic.Value;
+        var key = (row.OrganizationId, row.LocationId, row.Date);
+        var hasManualCash = manualCash.TryGetValue(key, out var manualElectronic);
+        var hasManualTerminal = manualTerminal.ContainsKey(key);
+        var cash = hasManualCash ? manualElectronic : row.FiscalElectronic;
+        var copied = !row.HasSourceConflict && hasManualCash && row.BankElectronic is not null && manualElectronic == row.BankElectronic.Value;
         var difference = !row.HasSourceConflict && row.BankElectronic is not null && cash is not null ? cash - row.BankElectronic : null;
         var status = row.HasSourceConflict
             ? $"Конфликт кассовых источников — требуется проверка{SourceSuffix(row.FiscalSources)}"
             : SummaryStatus(row.BankElectronic, cash, row.ShiftTotal, row.ShiftCount, difference, copied) + SourceSuffix(row.FiscalSources);
-        if (hasManual && !copied) status += " — ручная корректировка";
+        if (hasManualTerminal) status += " — терминал вручную";
+        if (hasManualCash && !copied) status += " — касса вручную";
 
         return new DaySummaryRow(
             row.Date, row.OrganizationId, row.LocationId, row.Organization, row.Location,
