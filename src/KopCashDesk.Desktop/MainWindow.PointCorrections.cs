@@ -10,24 +10,24 @@ public partial class MainWindow
     {
         VersionText.Text = AppVersion.Display;
         _db.EnsureManualCashPostings();
-        var repairedDuplicates = _db.EnsureV053Fixes();
+        var matching = _db.RebuildCrossSourceShiftMatches();
         var applied = KnownBusinessRules.ApplyPending(_db);
-        if (repairedDuplicates > 0 || applied > 0)
+        if (matching.NewMatches > 0 || matching.NewConflicts > 0 || applied > 0)
         {
             RefreshAll();
-            StatusText.Text = repairedDuplicates > 0
-                ? $"Исправлено задвоенных кассовых записей: {repairedDuplicates}. Применено правил: {applied}"
-                : $"Применено правил сопоставления: {applied}";
+            StatusText.Text = matching.NewConflicts > 0
+                ? $"Сопоставлено смен: {matching.MatchedPairs}. Конфликтов источников: {matching.Conflicts}. Применено правил: {applied}"
+                : $"Сопоставлено смен: {matching.MatchedPairs}. Применено правил: {applied}";
         }
     }
 
     private void Summary_Click(object sender, RoutedEventArgs e)
     {
-        var repairedDuplicates = _db.EnsureV053Fixes();
-        if (repairedDuplicates > 0)
+        var matching = _db.RebuildCrossSourceShiftMatches();
+        if (matching.NewMatches > 0 || matching.NewConflicts > 0)
         {
             RefreshAll();
-            StatusText.Text = $"Исправлено задвоенных кассовых записей: {repairedDuplicates}";
+            StatusText.Text = $"Сопоставлено кассовых смен: {matching.MatchedPairs}; конфликтов: {matching.Conflicts}";
         }
 
         _page = "summary";
