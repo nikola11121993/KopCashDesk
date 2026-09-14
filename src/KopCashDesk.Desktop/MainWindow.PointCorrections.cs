@@ -10,11 +10,14 @@ public partial class MainWindow
     {
         VersionText.Text = AppVersion.Display;
         _db.EnsureManualCashPostings();
+        var repairedDuplicates = _db.EnsureV051Fixes();
         var applied = KnownBusinessRules.ApplyPending(_db);
-        if (applied > 0)
+        if (repairedDuplicates > 0 || applied > 0)
         {
             RefreshAll();
-            StatusText.Text = $"Применено правил сопоставления: {applied}";
+            StatusText.Text = repairedDuplicates > 0
+                ? $"Исправлено задвоенных смен: {repairedDuplicates}. Применено правил: {applied}"
+                : $"Применено правил сопоставления: {applied}";
         }
     }
 
@@ -24,7 +27,7 @@ public partial class MainWindow
         SearchBox.Text = "";
         SearchBox.IsEnabled = false;
         PrimaryButton.Visibility = Visibility.Collapsed;
-        PageContent.Content = RenderSummary();
+        PageContent.Content = RenderSummaryV051();
     }
 
     private void OrganizationFilter_SelectionChangedV04(object sender, SelectionChangedEventArgs e)
@@ -34,7 +37,7 @@ public partial class MainWindow
         {
             SearchBox.IsEnabled = false;
             PrimaryButton.Visibility = Visibility.Collapsed;
-            PageContent.Content = RenderSummary();
+            PageContent.Content = RenderSummaryV051();
             return;
         }
         if (_page == "reconciliation")
@@ -61,7 +64,7 @@ public partial class MainWindow
         {
             SearchBox.IsEnabled = false;
             PrimaryButton.Visibility = Visibility.Collapsed;
-            PageContent.Content = RenderSummary();
+            PageContent.Content = RenderSummaryV051();
         }
         else if (_page == "reconciliation")
         {
