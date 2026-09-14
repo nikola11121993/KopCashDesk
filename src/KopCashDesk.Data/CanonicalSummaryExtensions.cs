@@ -13,6 +13,7 @@ public static class CanonicalSummaryExtensions
         int? month = null,
         Guid? locationId = null)
     {
+        database.EnsureManualTerminalPostings();
         using var db = Open(database);
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
@@ -69,9 +70,13 @@ public static class CanonicalSummaryExtensions
                 FROM fiscal_source_conflicts
                 GROUP BY business_date,organization_id,location_id
             ),
-            manual AS (
+            manual_cash AS (
                 SELECT business_date AS day,organization_id,location_id
                 FROM manual_cash_postings
+            ),
+            manual_terminal AS (
+                SELECT business_date AS day,organization_id,location_id,electronic_kopecks
+                FROM manual_terminal_postings
             ),
             keys AS (
                 SELECT day,organization_id,location_id FROM op WHERE bank_count>0 OR fiscal_count>0
@@ -82,7 +87,9 @@ public static class CanonicalSummaryExtensions
                 UNION
                 SELECT day,organization_id,location_id FROM conflicts
                 UNION
-                SELECT day,organization_id,location_id FROM manual
+                SELECT day,organization_id,location_id FROM manual_cash
+                UNION
+                SELECT day,organization_id,location_id FROM manual_terminal
             )
             SELECT
                 k.day,
@@ -90,7 +97,8 @@ public static class CanonicalSummaryExtensions
                 org.name,
                 k.location_id,
                 loc.name,
-                CASE WHEN COALESCE(op.bank_count,0)>0 THEN op.bank_sum ELSE NULL END,
+                CASE WHEN manual_terminal.electronic_kopecks IS NOT NULL THEN manual_terminal.electronic_kopecks
+                     WHEN COALESCE(op.bank_count,0)>0 THEN op.bank_sum ELSE NULL END,
                 CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL
                      WHEN COALESCE(op.fiscal_count,0)>0 THEN op.fiscal_sum ELSE NULL END,
                 CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL ELSE shifts.total_sum END,
@@ -113,6 +121,7 @@ public static class CanonicalSummaryExtensions
             LEFT JOIN shifts ON shifts.day=k.day AND shifts.organization_id=k.organization_id AND shifts.location_id=k.location_id
             LEFT JOIN raw_sources ON raw_sources.day=k.day AND raw_sources.organization_id=k.organization_id AND raw_sources.location_id=k.location_id
             LEFT JOIN conflicts ON conflicts.day=k.day AND conflicts.organization_id=k.organization_id AND conflicts.location_id=k.location_id
+            LEFT JOIN manual_terminal ON manual_terminal.day=k.day AND manual_terminal.organization_id=k.organization_id AND manual_terminal.location_id=k.location_id
             WHERE ($org IS NULL OR k.organization_id=$org)
               AND ($loc IS NULL OR k.location_id=$loc)
               AND ($year IS NULL OR CAST(substr(k.day,1,4) AS INTEGER)=$year)
