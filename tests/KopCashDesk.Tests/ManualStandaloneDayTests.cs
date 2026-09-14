@@ -34,6 +34,6 @@ public sealed class ManualStandaloneDayTests
         Assert.Equal(date, manual.Date);
         Assert.Equal(76123.45m, manual.Electronic);
         Assert.Empty(db.ShiftClosures(organization.Id, location.Id, date));
-        Assert.DoesNotContain(db.Operations(organization.Id), x => x.SourceKind == SourceKind.Fiscal);
+        Assert.Empty(db.Operations(organization.Id));
     }
 }
