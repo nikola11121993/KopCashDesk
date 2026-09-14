@@ -432,10 +432,31 @@ public static class ReconciliationExtensions
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            SELECT substr(occurred_at,1,10),source,external_id,amount_kopecks,occurred_at
-            FROM operations
-            WHERE organization_id=$org AND location_id=$loc AND source_kind='Fiscal' AND payment='Electronic'
-            ORDER BY occurred_at,source,external_id
+            WITH fiscal AS (
+                SELECT
+                    substr(occurred_at,1,10) AS day,
+                    source,
+                    external_id,
+                    amount_kopecks,
+                    occurred_at,
+                    CASE
+                        WHEN source='Taxcom.ShiftReport' THEN 1
+                        WHEN source='Taxcom.FiscalDocuments' THEN 2
+                        WHEN source='Frontol.Report' THEN 3
+                        ELSE 4
+                    END AS priority
+                FROM operations
+                WHERE organization_id=$org AND location_id=$loc AND source_kind='Fiscal' AND payment='Electronic'
+            ),
+            chosen AS (
+                SELECT day,MIN(priority) AS priority
+                FROM fiscal
+                GROUP BY day
+            )
+            SELECT f.day,f.source,f.external_id,f.amount_kopecks,f.occurred_at
+            FROM fiscal f
+            JOIN chosen c ON c.day=f.day AND c.priority=f.priority
+            ORDER BY f.occurred_at,f.source,f.external_id
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
