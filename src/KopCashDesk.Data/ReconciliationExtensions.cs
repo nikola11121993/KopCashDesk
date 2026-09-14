@@ -42,6 +42,7 @@ public static class ReconciliationExtensions
         int? month = null,
         Guid? locationId = null)
     {
+        database.EnsureManualTerminalPostings();
         var organizations = database.Organizations().ToDictionary(x => x.Id);
         var locations = database.Locations()
             .Where(x => organizationId is null || x.OrganizationId == organizationId)
@@ -382,21 +383,48 @@ public static class ReconciliationExtensions
 
     private static List<BankDay> ReadBankDays(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
     {
-        using var command = db.CreateCommand();
-        command.Transaction = tx;
-        command.CommandText = """
-            SELECT substr(occurred_at,1,10),SUM(amount_kopecks),COUNT(*)
-            FROM operations
-            WHERE organization_id=$org AND location_id=$loc AND source_kind='Bank' AND payment='Electronic'
-            GROUP BY substr(occurred_at,1,10)
-            ORDER BY substr(occurred_at,1,10)
-            """;
-        command.Parameters.AddWithValue("$org", organizationId.ToString());
-        command.Parameters.AddWithValue("$loc", locationId.ToString());
-        using var reader = command.ExecuteReader();
-        var result = new List<BankDay>();
-        while (reader.Read()) result.Add(new(ParseDate(reader.GetString(0)), reader.GetInt64(1), reader.GetInt32(2)));
-        return result;
+        var result = new Dictionary<DateOnly, BankDay>();
+
+        using (var command = db.CreateCommand())
+        {
+            command.Transaction = tx;
+            command.CommandText = """
+                SELECT substr(occurred_at,1,10),SUM(amount_kopecks),COUNT(*)
+                FROM operations
+                WHERE organization_id=$org AND location_id=$loc AND source_kind='Bank' AND payment='Electronic'
+                GROUP BY substr(occurred_at,1,10)
+                ORDER BY substr(occurred_at,1,10)
+                """;
+            command.Parameters.AddWithValue("$org", organizationId.ToString());
+            command.Parameters.AddWithValue("$loc", locationId.ToString());
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var date = ParseDate(reader.GetString(0));
+                result[date] = new(date, reader.GetInt64(1), reader.GetInt32(2));
+            }
+        }
+
+        using (var command = db.CreateCommand())
+        {
+            command.Transaction = tx;
+            command.CommandText = """
+                SELECT business_date,electronic_kopecks
+                FROM manual_terminal_postings
+                WHERE organization_id=$org AND location_id=$loc
+                ORDER BY business_date
+                """;
+            command.Parameters.AddWithValue("$org", organizationId.ToString());
+            command.Parameters.AddWithValue("$loc", locationId.ToString());
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var date = ParseDate(reader.GetString(0));
+                result[date] = new(date, reader.GetInt64(1), 1);
+            }
+        }
+
+        return result.Values.OrderBy(x => x.Date).ToList();
     }
 
     private static List<CashEvent> ReadFiscalEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
