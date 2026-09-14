@@ -138,7 +138,7 @@ public sealed class UnifiedImportWindow : Window
         center.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
         center.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
 
-        var listBorder = new Border
+        var listBorder = new System.Windows.Controls.Border
         {
             BorderBrush = Brushes.LightGray,
             BorderThickness = new Thickness(1),
@@ -158,7 +158,7 @@ public sealed class UnifiedImportWindow : Window
         listBorder.Child = _fileList;
         center.Children.Add(listBorder);
 
-        var resultBorder = new Border
+        var resultBorder = new System.Windows.Controls.Border
         {
             BorderBrush = Brushes.LightGray,
             BorderThickness = new Thickness(1),
