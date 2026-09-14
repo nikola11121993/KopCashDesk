@@ -7,7 +7,7 @@ namespace KopCashDesk.Tests;
 public sealed class V053DuplicateRepairTests
 {
     [Fact]
-    public void Repair_RemovesOldTaxcomDuplicate_WhenOneCopyHasNoFn()
+    public void LegacyV053_DoesNotDeleteSameSourceTaxcomHistory()
     {
         var root = Path.Combine(Path.GetTempPath(), "KopCashDesk.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -23,23 +23,15 @@ public sealed class V053DuplicateRepairTests
         SaveShiftWithFiscal(db, org.Id, loc.Id, "old-copy", closed, 1233734m, "", 2);
         SaveShiftWithFiscal(db, org.Id, loc.Id, "real-copy", closed.AddMinutes(1), 1233734m, "7381440800477733", 2);
 
-        var before = Assert.Single(db.PointDaySummaries(org.Id, 2026, 7, loc.Id));
-        Assert.Equal(2467468m, before.FiscalElectronic);
-        Assert.Equal(2467468m, before.ShiftTotal);
-        Assert.Equal(2, before.ShiftCount);
-
         var repaired = db.EnsureV053Fixes();
 
-        Assert.True(repaired >= 1);
-        var after = Assert.Single(db.PointDaySummaries(org.Id, 2026, 7, loc.Id));
-        Assert.Equal(1233734m, after.FiscalElectronic);
-        Assert.Equal(1233734m, after.ShiftTotal);
-        Assert.Equal(1, after.ShiftCount);
-        Assert.Single(db.ShiftClosures(org.Id, loc.Id, new DateOnly(2026, 7, 6)));
+        Assert.Equal(0, repaired);
+        Assert.Equal(2, db.ShiftClosures(org.Id, loc.Id, new DateOnly(2026, 7, 6)).Count);
+        Assert.Empty(db.CrossSourceShiftLinks());
     }
 
     [Fact]
-    public void Repair_PreservesTwoDifferentRegisters_WithSameAmounts()
+    public void LegacyV053_PreservesTwoDifferentTaxcomRegisters_WithSameAmounts()
     {
         var root = Path.Combine(Path.GetTempPath(), "KopCashDesk.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -61,6 +53,7 @@ public sealed class V053DuplicateRepairTests
         Assert.Equal(2000m, after.FiscalElectronic);
         Assert.Equal(2000m, after.ShiftTotal);
         Assert.Equal(2, after.ShiftCount);
+        Assert.Equal(2, db.ShiftClosures(org.Id, loc.Id, new DateOnly(2026, 7, 6)).Count);
     }
 
     private static void SaveShiftWithFiscal(
