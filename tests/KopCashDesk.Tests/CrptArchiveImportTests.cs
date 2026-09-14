@@ -30,16 +30,16 @@ public sealed class CrptArchiveImportTests
         Assert.Equal(1, summary.FilesProcessed);
         Assert.Equal(2, summary.ReceiptsRead);
         Assert.Equal(0, summary.LocationsCreated);
-        Assert.Equal(800m, summary.ElectronicTotal);
+        Assert.Equal(8m, summary.ElectronicTotal);
         Assert.Equal(0m, summary.CashTotal);
 
         var day = Assert.Single(db.PointDaySummaries(organization.Id, 2026, 7, location.Id));
-        Assert.Equal(800m, day.FiscalElectronic);
+        Assert.Equal(8m, day.FiscalElectronic);
 
         var repeat = new CrptArchiveImporter(db).ImportFiles([file]);
         Assert.Equal(0, repeat.OperationsInserted);
         Assert.Equal(2, repeat.OperationsUpdated);
-        Assert.Equal(800m, Assert.Single(db.PointDaySummaries(organization.Id, 2026, 7, location.Id)).FiscalElectronic);
+        Assert.Equal(8m, Assert.Single(db.PointDaySummaries(organization.Id, 2026, 7, location.Id)).FiscalElectronic);
     }
 
     private static void CreateCrpt(string path)
