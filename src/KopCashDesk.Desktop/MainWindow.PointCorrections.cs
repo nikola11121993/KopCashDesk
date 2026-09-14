@@ -10,13 +10,13 @@ public partial class MainWindow
     {
         VersionText.Text = AppVersion.Display;
         _db.EnsureManualCashPostings();
-        var repairedDuplicates = _db.EnsureV051Fixes();
+        var repairedDuplicates = _db.EnsureV052Fixes();
         var applied = KnownBusinessRules.ApplyPending(_db);
         if (repairedDuplicates > 0 || applied > 0)
         {
             RefreshAll();
             StatusText.Text = repairedDuplicates > 0
-                ? $"Исправлено задвоенных смен: {repairedDuplicates}. Применено правил: {applied}"
+                ? $"Исправлено задвоенных кассовых записей: {repairedDuplicates}. Применено правил: {applied}"
                 : $"Применено правил сопоставления: {applied}";
         }
     }
