@@ -125,8 +125,15 @@ public static class CrossSourceShiftExtensions
             }
         }
 
+        // Rebuild only automatic relationships. Raw source rows are never deleted.
         Execute(db, tx, $"DELETE FROM shift_source_links WHERE match_kind='{AutomaticMatchKind}'");
         Execute(db, tx, $"DELETE FROM fiscal_source_conflicts WHERE reason='{AutomaticConflictReason}'");
+        Execute(db, tx, """
+            UPDATE operations
+            SET source_kind='Fiscal'
+            WHERE source IN ('Taxcom.ShiftReport','Frontol.Report')
+              AND source_kind IN ('FiscalObservation','FiscalConflict');
+            """);
 
         var newMatches = 0;
         foreach (var match in desiredMatches)
@@ -134,6 +141,8 @@ public static class CrossSourceShiftExtensions
             var id = DeterministicGuid($"match|{match.Taxcom.Id}|{match.Frontol.Id}");
             var createdAt = existingMatchCreated.GetValueOrDefault(id.ToString(), DateTimeOffset.UtcNow.ToString("O"));
             InsertMatch(db, tx, id, match, createdAt);
+            MarkOperationRole(db, tx, match.Frontol, "FiscalObservation");
+
             if (existingMatchCreated.ContainsKey(id.ToString())) continue;
             newMatches++;
             Audit(db, tx, "Cross-source fiscal shift matched",
@@ -151,6 +160,9 @@ public static class CrossSourceShiftExtensions
             var id = DeterministicGuid($"conflict|{conflict.Taxcom.Id}|{conflict.Frontol.Id}");
             var createdAt = existingConflictCreated.GetValueOrDefault(id.ToString(), DateTimeOffset.UtcNow.ToString("O"));
             InsertConflict(db, tx, id, conflict, createdAt);
+            MarkOperationRole(db, tx, conflict.Taxcom, "FiscalConflict");
+            MarkOperationRole(db, tx, conflict.Frontol, "FiscalConflict");
+
             if (existingConflictCreated.ContainsKey(id.ToString())) continue;
             newConflicts++;
             Audit(db, tx, "Cross-source fiscal shift conflict",
@@ -356,6 +368,23 @@ public static class CrossSourceShiftExtensions
         command.Parameters.AddWithValue("$reason", AutomaticConflictReason);
         command.Parameters.AddWithValue("$delta", conflict.DeltaSeconds);
         command.Parameters.AddWithValue("$created", createdAt);
+        command.ExecuteNonQuery();
+    }
+
+    private static void MarkOperationRole(SqliteConnection db, SqliteTransaction tx, Observation shift, string role)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            UPDATE operations
+            SET source_kind=$role
+            WHERE source=$source
+              AND (external_id=$cash OR external_id=$electronic)
+            """;
+        command.Parameters.AddWithValue("$role", role);
+        command.Parameters.AddWithValue("$source", shift.Source);
+        command.Parameters.AddWithValue("$cash", shift.ExternalId + ":cash");
+        command.Parameters.AddWithValue("$electronic", shift.ExternalId + ":electronic");
         command.ExecuteNonQuery();
     }
 
