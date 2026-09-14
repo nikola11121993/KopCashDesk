@@ -10,7 +10,7 @@ public partial class MainWindow
     {
         VersionText.Text = AppVersion.Display;
         _db.EnsureManualCashPostings();
-        var repairedDuplicates = _db.EnsureV052Fixes();
+        var repairedDuplicates = _db.EnsureV053Fixes();
         var applied = KnownBusinessRules.ApplyPending(_db);
         if (repairedDuplicates > 0 || applied > 0)
         {
@@ -23,6 +23,13 @@ public partial class MainWindow
 
     private void Summary_Click(object sender, RoutedEventArgs e)
     {
+        var repairedDuplicates = _db.EnsureV053Fixes();
+        if (repairedDuplicates > 0)
+        {
+            RefreshAll();
+            StatusText.Text = $"Исправлено задвоенных кассовых записей: {repairedDuplicates}";
+        }
+
         _page = "summary";
         SearchBox.Text = "";
         SearchBox.IsEnabled = false;
