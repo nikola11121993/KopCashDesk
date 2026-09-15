@@ -14,46 +14,24 @@ public static class CanonicalSummaryExtensions
         Guid? locationId = null)
     {
         database.EnsureManualTerminalPostings();
+        database.RebuildCrossSourceShiftMatches();
         using var db = Open(database);
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             WITH operation_rows AS (
-                SELECT
-                    substr(occurred_at,1,10) AS day,
-                    organization_id,
-                    location_id,
-                    source,
-                    source_kind,
-                    payment,
-                    amount_kopecks,
-                    CASE
-                        WHEN source='Taxcom.ShiftReport' THEN 1
-                        WHEN source='Taxcom.FiscalDocuments' THEN 2
-                        WHEN source='Frontol.Report' THEN 3
-                        ELSE 4
-                    END AS fiscal_priority
-                FROM operations
-                WHERE location_id IS NOT NULL
-            ),
-            chosen_fiscal AS (
-                SELECT day,organization_id,location_id,MIN(fiscal_priority) AS fiscal_priority
-                FROM operation_rows
-                WHERE source_kind='Fiscal' AND payment='Electronic'
-                GROUP BY day,organization_id,location_id
+                SELECT substr(occurred_at,1,10) AS day,organization_id,location_id,source_kind,payment,amount_kopecks
+                FROM operations WHERE source_kind='Bank' AND location_id IS NOT NULL
+                UNION ALL
+                SELECT substr(occurred_at,1,10),organization_id,location_id,source_kind,payment,amount_kopecks
+                FROM canonical_fiscal_operations
             ),
             op AS (
-                SELECT
-                    r.day,
-                    r.organization_id,
-                    r.location_id,
-                    SUM(CASE WHEN r.source_kind='Bank' AND r.payment='Electronic' THEN r.amount_kopecks ELSE 0 END) AS bank_sum,
-                    SUM(CASE WHEN r.source_kind='Bank' AND r.payment='Electronic' THEN 1 ELSE 0 END) AS bank_count,
-                    SUM(CASE WHEN r.source_kind='Fiscal' AND r.payment='Electronic' AND r.fiscal_priority=cf.fiscal_priority THEN r.amount_kopecks ELSE 0 END) AS fiscal_sum,
-                    SUM(CASE WHEN r.source_kind='Fiscal' AND r.payment='Electronic' AND r.fiscal_priority=cf.fiscal_priority THEN 1 ELSE 0 END) AS fiscal_count
-                FROM operation_rows r
-                LEFT JOIN chosen_fiscal cf
-                    ON cf.day=r.day AND cf.organization_id=r.organization_id AND cf.location_id=r.location_id
-                GROUP BY r.day,r.organization_id,r.location_id
+                SELECT day,organization_id,location_id,
+                    SUM(CASE WHEN source_kind='Bank' AND payment='Electronic' THEN amount_kopecks ELSE 0 END) AS bank_sum,
+                    SUM(CASE WHEN source_kind='Bank' AND payment='Electronic' THEN 1 ELSE 0 END) AS bank_count,
+                    SUM(CASE WHEN source_kind='Fiscal' AND payment='Electronic' THEN amount_kopecks ELSE 0 END) AS fiscal_sum,
+                    SUM(CASE WHEN source_kind='Fiscal' AND payment='Electronic' THEN 1 ELSE 0 END) AS fiscal_count
+                FROM operation_rows GROUP BY day,organization_id,location_id
             ),
             canonical_shifts AS (
                 SELECT s.*
@@ -106,7 +84,7 @@ public static class CanonicalSummaryExtensions
                 GROUP BY business_date,organization_id,location_id
             ),
             manual_cash AS (
-                SELECT business_date AS day,organization_id,location_id
+                SELECT business_date AS day,organization_id,location_id,electronic_kopecks
                 FROM manual_cash_postings
             ),
             manual_terminal AS (
@@ -137,6 +115,7 @@ public static class CanonicalSummaryExtensions
                 CASE WHEN manual_terminal.electronic_kopecks IS NOT NULL THEN manual_terminal.electronic_kopecks
                      WHEN COALESCE(op.bank_count,0)>0 THEN op.bank_sum ELSE NULL END,
                 CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL
+                     WHEN COALESCE(op.fiscal_count,0)>0 AND manual_cash.electronic_kopecks IS NOT NULL THEN manual_cash.electronic_kopecks
                      WHEN COALESCE(op.fiscal_count,0)>0 THEN op.fiscal_sum ELSE NULL END,
                 CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL ELSE shifts.total_sum END,
                 CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL ELSE shifts.cash_sum END,
@@ -162,8 +141,9 @@ public static class CanonicalSummaryExtensions
             LEFT JOIN raw_sources ON raw_sources.day=k.day AND raw_sources.organization_id=k.organization_id AND raw_sources.location_id=k.location_id
             LEFT JOIN document_sources ON document_sources.day=k.day AND document_sources.organization_id=k.organization_id AND document_sources.location_id=k.location_id
             LEFT JOIN conflicts ON conflicts.day=k.day AND conflicts.organization_id=k.organization_id AND conflicts.location_id=k.location_id
+            LEFT JOIN manual_cash ON manual_cash.day=k.day AND manual_cash.organization_id=k.organization_id AND manual_cash.location_id=k.location_id
             LEFT JOIN manual_terminal ON manual_terminal.day=k.day AND manual_terminal.organization_id=k.organization_id AND manual_terminal.location_id=k.location_id
-            WHERE ($org IS NULL OR k.organization_id=$org)
+            WHERE loc.is_active=1 AND ($org IS NULL OR k.organization_id=$org)
               AND ($loc IS NULL OR k.location_id=$loc)
               AND ($year IS NULL OR CAST(substr(k.day,1,4) AS INTEGER)=$year)
               AND ($month IS NULL OR CAST(substr(k.day,6,2) AS INTEGER)=$month)

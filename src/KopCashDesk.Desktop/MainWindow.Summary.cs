@@ -216,7 +216,7 @@ public partial class MainWindow
         return root;
     }
 
-    private static DataGrid BuildDailySummaryGrid(
+    private DataGrid BuildDailySummaryGrid(
         Action<DaySummaryRow, bool> toggleSberCopy,
         Action<DaySummaryRow> editManualCash,
         Action<DaySummaryRow>? editManualTerminal = null,
@@ -261,11 +261,8 @@ public partial class MainWindow
         grid.MouseDoubleClick += (_, _) =>
         {
             if (grid.SelectedItem is not DaySummaryRow row) return;
-            var header = grid.CurrentCell.Column?.Header?.ToString();
-            if (string.Equals(header, "Касса безнал", StringComparison.Ordinal))
-                editManualCash(row);
-            else if (string.Equals(header, "Терминал безнал", StringComparison.Ordinal) && editManualTerminal is not null)
-                editManualTerminal(row);
+            ShowDayDetails(row);
+
         };
 
         grid.KeyDown += (_, e) =>
@@ -278,6 +275,9 @@ public partial class MainWindow
         };
 
         var menu = new ContextMenu();
+        var details = new MenuItem { Header = "Расшифровка по ККТ и сменам…" };
+        details.Click += (_, _) => { if (grid.SelectedItem is DaySummaryRow row) ShowDayDetails(row); };
+        menu.Items.Add(details);
         if (editManualTerminal is not null)
         {
             var editTerminal = new MenuItem { Header = "Изменить сумму терминала..." };

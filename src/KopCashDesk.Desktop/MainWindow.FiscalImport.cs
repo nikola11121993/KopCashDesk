@@ -10,8 +10,9 @@ public partial class MainWindow
         {
             RefreshAll();
             StatusText.Text = "Кассовые отчёты Такском обработаны";
-            if (_page == "summary") PageContent.Content = RenderSummary();
-        }) { Owner = this };
+            if (_page == "summary") PageContent.Content = RenderSummaryV051();
+        })
+        { Owner = this };
         window.ShowDialog();
     }
 
@@ -21,8 +22,9 @@ public partial class MainWindow
         {
             RefreshAll();
             StatusText.Text = "Выгрузка Frontol 6 обработана";
-            if (_page == "summary") PageContent.Content = RenderSummary();
-        }) { Owner = this };
+            if (_page == "summary") PageContent.Content = RenderSummaryV051();
+        })
+        { Owner = this };
         window.ShowDialog();
     }
 }

@@ -222,8 +222,8 @@ public sealed class Database
         using var db = Open();
         Execute(db,
             """
-            INSERT INTO shift_closures(id,source,external_id,organization_id,location_id,closed_at,total_kopecks,cash_kopecks,electronic_kopecks,fn,shift_number,document_id)
-            VALUES($id,$s,$e,$o,$l,$t,$total,$cash,$electronic,$fn,$shift,$d)
+            INSERT INTO shift_closures(id,source,external_id,organization_id,location_id,closed_at,total_kopecks,cash_kopecks,electronic_kopecks,fn,shift_number,document_id,kkt_serial,registration_number,register_display_name)
+            VALUES($id,$s,$e,$o,$l,$t,$total,$cash,$electronic,$fn,$shift,$d,$serial,$rnm,$name)
             ON CONFLICT(source,external_id) DO UPDATE SET
                 organization_id=excluded.organization_id,
                 location_id=excluded.location_id,
@@ -233,12 +233,14 @@ public sealed class Database
                 electronic_kopecks=excluded.electronic_kopecks,
                 fn=excluded.fn,
                 shift_number=excluded.shift_number,
-                document_id=excluded.document_id
+                document_id=excluded.document_id,
+                kkt_serial=excluded.kkt_serial,registration_number=excluded.registration_number,register_display_name=excluded.register_display_name
             """,
             ("$id", Guid.NewGuid().ToString()), ("$s", x.Source), ("$e", x.ExternalId),
-            ("$o", x.OrganizationId.ToString()), ("$l", x.LocationId.ToString()), ("$t", x.ClosedAt.ToString("O")),
+            ("$o", x.OrganizationId.ToString()), ("$l", x.LocationId?.ToString()), ("$t", x.ClosedAt.ToString("O")),
             ("$total", Money.ToKopecks(x.Total)), ("$cash", Money.ToKopecks(x.Cash)), ("$electronic", Money.ToKopecks(x.Electronic)),
-            ("$fn", x.FiscalDriveNumber.Trim()), ("$shift", x.ShiftNumber), ("$d", x.SourceDocumentId));
+            ("$fn", x.FiscalDriveNumber.Trim()), ("$shift", x.ShiftNumber), ("$d", x.SourceDocumentId),
+            ("$serial", x.KktSerial), ("$rnm", x.RegistrationNumber), ("$name", x.RegisterDisplayName));
     }
 
     public IReadOnlyList<IntegrationProfile> Integrations()
@@ -312,96 +314,7 @@ public sealed class Database
     }
 
     public IReadOnlyList<PointDaySummary> PointDaySummaries(Guid? organizationId = null, int? year = null, int? month = null, Guid? locationId = null)
-    {
-        using var db = Open();
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = """
-            WITH op AS (
-                SELECT
-                    substr(occurred_at,1,10) AS day,
-                    organization_id,
-                    location_id,
-                    SUM(CASE WHEN source_kind='Bank' AND payment='Electronic' THEN amount_kopecks ELSE 0 END) AS bank_sum,
-                    SUM(CASE WHEN source_kind='Bank' AND payment='Electronic' THEN 1 ELSE 0 END) AS bank_count,
-                    SUM(CASE WHEN source_kind='Fiscal' AND payment='Electronic' THEN amount_kopecks ELSE 0 END) AS fiscal_sum,
-                    SUM(CASE WHEN source_kind='Fiscal' AND payment='Electronic' THEN 1 ELSE 0 END) AS fiscal_count
-                FROM operations
-                WHERE location_id IS NOT NULL
-                GROUP BY substr(occurred_at,1,10), organization_id, location_id
-            ),
-            shifts AS (
-                SELECT
-                    substr(closed_at,1,10) AS day,
-                    organization_id,
-                    location_id,
-                    SUM(total_kopecks) AS total_sum,
-                    SUM(cash_kopecks) AS cash_sum,
-                    SUM(electronic_kopecks) AS electronic_sum,
-                    COUNT(*) AS shift_count,
-                    MAX(closed_at) AS last_closed_at
-                FROM shift_closures
-                GROUP BY substr(closed_at,1,10), organization_id, location_id
-            ),
-            manual AS (
-                SELECT business_date AS day,organization_id,location_id
-                FROM manual_cash_postings
-            ),
-            keys AS (
-                SELECT day,organization_id,location_id FROM op WHERE bank_count>0 OR fiscal_count>0
-                UNION
-                SELECT day,organization_id,location_id FROM shifts
-                UNION
-                SELECT day,organization_id,location_id FROM manual
-            )
-            SELECT
-                k.day,
-                k.organization_id,
-                org.name,
-                k.location_id,
-                loc.name,
-                CASE WHEN COALESCE(op.bank_count,0)>0 THEN op.bank_sum ELSE NULL END,
-                CASE WHEN COALESCE(op.fiscal_count,0)>0 THEN op.fiscal_sum ELSE NULL END,
-                shifts.total_sum,
-                shifts.cash_sum,
-                shifts.electronic_sum,
-                COALESCE(shifts.shift_count,0),
-                shifts.last_closed_at
-            FROM keys k
-            JOIN organizations org ON org.id=k.organization_id
-            JOIN locations loc ON loc.id=k.location_id
-            LEFT JOIN op ON op.day=k.day AND op.organization_id=k.organization_id AND op.location_id=k.location_id
-            LEFT JOIN shifts ON shifts.day=k.day AND shifts.organization_id=k.organization_id AND shifts.location_id=k.location_id
-            WHERE ($org IS NULL OR k.organization_id=$org)
-              AND ($loc IS NULL OR k.location_id=$loc)
-              AND ($year IS NULL OR CAST(substr(k.day,1,4) AS INTEGER)=$year)
-              AND ($month IS NULL OR CAST(substr(k.day,6,2) AS INTEGER)=$month)
-            ORDER BY k.day DESC, org.name, loc.name
-            """;
-        cmd.Parameters.AddWithValue("$org", organizationId is null ? DBNull.Value : organizationId.Value.ToString());
-        cmd.Parameters.AddWithValue("$loc", locationId is null ? DBNull.Value : locationId.Value.ToString());
-        cmd.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value);
-        cmd.Parameters.AddWithValue("$month", month is null ? DBNull.Value : month.Value);
-
-        using var r = cmd.ExecuteReader();
-        var result = new List<PointDaySummary>();
-        while (r.Read())
-        {
-            result.Add(new(
-                DateOnly.ParseExact(r.GetString(0), "yyyy-MM-dd", CultureInfo.InvariantCulture),
-                Guid.Parse(r.GetString(1)),
-                r.GetString(2),
-                Guid.Parse(r.GetString(3)),
-                r.GetString(4),
-                ReadMoney(r, 5),
-                ReadMoney(r, 6),
-                ReadMoney(r, 7),
-                ReadMoney(r, 8),
-                ReadMoney(r, 9),
-                r.GetInt32(10),
-                r.IsDBNull(11) ? null : DateTimeOffset.Parse(r.GetString(11), CultureInfo.InvariantCulture)));
-        }
-        return result;
-    }
+        => this.CanonicalPointDaySummaries(organizationId, year, month, locationId);
 
     private static decimal? ReadMoney(SqliteDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : Money.FromKopecks(reader.GetInt64(ordinal));
@@ -412,8 +325,10 @@ public sealed class Database
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT source,external_id,organization_id,location_id,closed_at,total_kopecks,cash_kopecks,electronic_kopecks,fn,shift_number,document_id
-            FROM shift_closures
+            FROM shift_closures s
             WHERE organization_id=$org AND location_id=$loc AND substr(closed_at,1,10)=$day
+              AND NOT EXISTS(SELECT 1 FROM shift_source_links l JOIN shift_closures canonical ON canonical.id=l.canonical_shift_id
+                             WHERE l.observed_shift_id=s.id AND canonical.source=s.source)
             ORDER BY closed_at
             """;
         cmd.Parameters.AddWithValue("$org", organizationId.ToString());
