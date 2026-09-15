@@ -54,7 +54,7 @@ public sealed class TaxcomFiscalDocumentImporter
     private readonly Guid? _fallbackOrganizationId;
     private List<Organization> _organizations = [];
     private List<Location> _locations = [];
-    private Dictionary<string, RegisterBinding> _registers = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<Guid> _registerIds = [];
 
     public TaxcomFiscalDocumentImporter(Database database, Guid? fallbackOrganizationId = null)
     {
@@ -66,7 +66,7 @@ public sealed class TaxcomFiscalDocumentImporter
     {
         _organizations = _database.Organizations().ToList();
         _locations = _database.Locations().ToList();
-        _registers = _database.RegisterBindings().ToDictionary(RegisterKey, StringComparer.OrdinalIgnoreCase);
+        _registerIds = _database.RegisterBindings().Select(x => x.Id).ToHashSet();
 
         var summary = new TaxcomFiscalDocumentImportSummary();
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -83,6 +83,7 @@ public sealed class TaxcomFiscalDocumentImporter
             }
         }
 
+        _database.RebuildCrossSourceShiftMatches();
         _database.Audit("taxcom.fiscal_documents.import",
             $"files={summary.FilesProcessed}; documents={summary.DocumentsProcessed}; inserted={summary.FiscalOperationsInserted}; updated={summary.FiscalOperationsUpdated}; skipped={summary.RowsSkipped}; failed={summary.FilesFailed}");
         return summary;
@@ -239,7 +240,10 @@ public sealed class TaxcomFiscalDocumentImporter
                 continue;
             }
 
-            var location = ResolveLocation(organization, fn, registerNumber, serial, kktName, pointName, summary);
+            var register = RegisterBindingService.Resolve(_database, organization.Id, serial, fn, registerNumber, kktName, pointName, DateOnly.FromDateTime(occurredAt.DateTime));
+            if (_registerIds.Add(register.Id) && register.LocationId is not null) summary.RegistersBound++;
+            if (register.LocationId is null && summary.Messages.Count < 12)
+                summary.Messages.Add($"ККТ {kktName} ({serial}, ФН {fn}): требуется привязка; исходные суммы сохранены.");
             var fd = DigitsOnly(Get(values, "№ ФД"));
             var fpd = DigitsOnly(Get(values, "ФПД"));
             var shift = Get(values, "№ смены").Trim();
@@ -249,9 +253,9 @@ public sealed class TaxcomFiscalDocumentImporter
             var kind = DocumentKind(documentType, operationText);
 
             if (cash != 0m)
-                UpsertFiscalPart(externalId + ":cash", organization, location, occurredAt, kind, PaymentKind.Cash, cash, documentId, summary);
+                UpsertFiscalPart(externalId + ":cash", organization, register, occurredAt, kind, PaymentKind.Cash, cash, documentId, summary, int.TryParse(shift, out var cashShift) ? cashShift : null);
             if (electronic != 0m)
-                UpsertFiscalPart(externalId + ":electronic", organization, location, occurredAt, kind, PaymentKind.Electronic, electronic, documentId, summary);
+                UpsertFiscalPart(externalId + ":electronic", organization, register, occurredAt, kind, PaymentKind.Electronic, electronic, documentId, summary, int.TryParse(shift, out var electronicShift) ? electronicShift : null);
 
             summary.DocumentsProcessed++;
             summary.CashTotal += cash;
@@ -263,25 +267,25 @@ public sealed class TaxcomFiscalDocumentImporter
     private void UpsertFiscalPart(
         string externalId,
         Organization organization,
-        Location location,
+        RegisterBinding register,
         DateTimeOffset occurredAt,
         OperationKind kind,
         PaymentKind payment,
         decimal amount,
         string documentId,
-        TaxcomFiscalDocumentImportSummary summary)
+        TaxcomFiscalDocumentImportSummary summary, int? shiftNumber)
     {
         var inserted = _database.UpsertFiscalOperation(new CashOperation(
             Source,
             externalId,
             organization.Id,
-            location.Id,
+            register.LocationId,
             occurredAt,
             SourceKind.Fiscal,
             kind,
             payment,
             amount,
-            documentId));
+            documentId, register.FiscalDriveNumber, register.KktSerial, register.RegisterNumber, register.DisplayName, shiftNumber));
 
         if (inserted) summary.FiscalOperationsInserted++;
         else summary.FiscalOperationsUpdated++;
@@ -306,92 +310,6 @@ public sealed class TaxcomFiscalDocumentImporter
         throw new InvalidDataException($"В имени файла '{originalName}' не найден ИНН. Выберите организацию в верхней части программы и повторите импорт.");
     }
 
-    private Location ResolveLocation(
-        Organization organization,
-        string fn,
-        string registerNumber,
-        string serial,
-        string kktName,
-        string pointName,
-        TaxcomFiscalDocumentImportSummary summary)
-    {
-        var organizationLocations = _locations.Where(x => x.OrganizationId == organization.Id && x.IsActive).ToArray();
-        var knownPoint = KnownBusinessRules.PointNameForRegisterSerial(serial) ?? KnownBusinessRules.PointNameForRegisterSerial(kktName);
-        if (knownPoint is not null)
-        {
-            var location = KnownBusinessRules.FindKnownPoint(organizationLocations, knownPoint);
-            if (location is null)
-            {
-                location = new Location(Guid.NewGuid(), organization.Id, knownPoint, string.Empty, false);
-                _database.Save(location);
-                _locations.Add(location);
-                summary.LocationsCreated++;
-            }
-            EnsureRegisterBinding(organization, location, fn, registerNumber, summary, BindingSource.Rule, true);
-            return location;
-        }
-
-        if (!string.IsNullOrWhiteSpace(fn) && _registers.TryGetValue(RegisterKey(organization.Id, fn), out var existingBinding))
-        {
-            var bound = _locations.FirstOrDefault(x => x.Id == existingBinding.LocationId && x.IsActive);
-            if (bound is not null) return bound;
-        }
-
-        var preferredName = PreferredPointName(kktName, pointName, serial, fn);
-        var nameKey = Normalize(preferredName);
-        var byName = organizationLocations.Where(x => Normalize(x.Name) == nameKey).ToArray();
-        Location? resolved = byName.Length == 1 ? byName[0] : null;
-
-        if (resolved is null && ContainsDigit(preferredName))
-        {
-            var byAddress = organizationLocations.Where(x =>
-            {
-                var address = Normalize(x.Address);
-                return !string.IsNullOrWhiteSpace(address) &&
-                       (address.Contains(nameKey, StringComparison.Ordinal) || nameKey.Contains(address, StringComparison.Ordinal));
-            }).ToArray();
-            if (byAddress.Length == 1) resolved = byAddress[0];
-        }
-
-        if (resolved is null)
-        {
-            resolved = new Location(Guid.NewGuid(), organization.Id, preferredName, string.Empty, false);
-            _database.Save(resolved);
-            _locations.Add(resolved);
-            summary.LocationsCreated++;
-        }
-
-        EnsureRegisterBinding(organization, resolved, fn, registerNumber, summary, BindingSource.Automatic, false);
-        return resolved;
-    }
-
-    private void EnsureRegisterBinding(
-        Organization organization,
-        Location location,
-        string fn,
-        string registerNumber,
-        TaxcomFiscalDocumentImportSummary summary,
-        BindingSource bindingSource,
-        bool isLocked)
-    {
-        if (string.IsNullOrWhiteSpace(fn)) return;
-        var key = RegisterKey(organization.Id, fn);
-        _registers.TryGetValue(key, out var existing);
-
-        var requested = new RegisterBinding(
-            existing?.Id ?? Guid.NewGuid(), organization.Id, location.Id, fn, registerNumber,
-            bindingSource, isLocked);
-        _database.SaveRegisterBinding(requested);
-
-        var stored = _database.RegisterBindings().FirstOrDefault(x =>
-            x.OrganizationId == organization.Id &&
-            string.Equals(DigitsOnly(x.FiscalDriveNumber), DigitsOnly(fn), StringComparison.Ordinal));
-        if (stored is null) return;
-        _registers[key] = stored;
-
-        if (existing is null && stored.LocationId == location.Id) summary.RegistersBound++;
-    }
-
     private static ReportMetadata ReadReportMetadata(IEnumerable<Row> rows, string[] sharedStrings)
     {
         var point = string.Empty;
@@ -406,16 +324,6 @@ public sealed class TaxcomFiscalDocumentImporter
             else if (key.Equals("ККТ", StringComparison.OrdinalIgnoreCase)) serial = value;
         }
         return new(point, serial);
-    }
-
-    private static string PreferredPointName(string kktName, string pointName, string serial, string fn)
-    {
-        var kkt = CleanPointName(kktName);
-        if (!IsGenericPoint(kkt)) return kkt;
-        var point = CleanPointName(pointName);
-        if (!IsGenericPoint(point)) return point;
-        var id = !string.IsNullOrWhiteSpace(serial) ? serial : fn;
-        return string.IsNullOrWhiteSpace(id) ? "Неопределённая ККТ" : $"ККТ {id}";
     }
 
     private static bool IsGenericPoint(string value)
@@ -573,8 +481,6 @@ public sealed class TaxcomFiscalDocumentImporter
     private static string Normalize(string value) => string.Join(' ', (value ?? string.Empty).Trim().ToLowerInvariant().Replace('ё', 'е').Split(' ', StringSplitOptions.RemoveEmptyEntries));
     private static bool ContainsDigit(string value) => (value ?? string.Empty).Any(char.IsDigit);
     private static string DigitsOnly(string value) => new((value ?? string.Empty).Where(char.IsDigit).ToArray());
-    private static string RegisterKey(RegisterBinding binding) => RegisterKey(binding.OrganizationId, binding.FiscalDriveNumber);
-    private static string RegisterKey(Guid organizationId, string fn) => $"{organizationId:N}|{DigitsOnly(fn)}";
 
     private static string HashText(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 

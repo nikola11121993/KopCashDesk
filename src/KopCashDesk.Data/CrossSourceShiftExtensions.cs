@@ -57,7 +57,8 @@ public static class CrossSourceShiftExtensions
         long CashKopecks,
         long ElectronicKopecks,
         string FiscalDriveNumber,
-        int? ShiftNumber);
+        int? ShiftNumber,
+        string KktSerial);
 
     private sealed record MatchCandidate(Observation Taxcom, Observation Frontol, int DeltaSeconds);
     private sealed record ConflictCandidate(Observation Taxcom, Observation Frontol, int DeltaSeconds);
@@ -79,7 +80,28 @@ public static class CrossSourceShiftExtensions
 
         foreach (var group in observations.GroupBy(x => (x.OrganizationId, x.LocationId, x.BusinessDate)))
         {
-            var taxcom = group.Where(x => x.Source == Taxcom).ToArray();
+            var taxcomRows = group.Where(x => x.Source == Taxcom).ToArray();
+            var duplicateTaxcom = new HashSet<string>();
+            foreach (var sameShift in taxcomRows.Where(x => x.FiscalDriveNumber.Length > 0 && x.ShiftNumber is not null)
+                .GroupBy(x => (x.FiscalDriveNumber, x.ShiftNumber)))
+            {
+                var ordered = sameShift.OrderByDescending(x => x.ClosedAt).ThenBy(x => x.Id).ToArray();
+                var canonical = ordered[0];
+                foreach (var observation in ordered.Skip(1))
+                {
+                    if (MoneyEqual(canonical, observation))
+                    {
+                        desiredMatches.Add(new(canonical, observation, DeltaSeconds(canonical.ClosedAt, observation.ClosedAt)));
+                        duplicateTaxcom.Add(observation.Id);
+                    }
+                    else
+                    {
+                        desiredConflicts.Add(new(canonical, observation, DeltaSeconds(canonical.ClosedAt, observation.ClosedAt)));
+                        duplicateTaxcom.Add(canonical.Id); duplicateTaxcom.Add(observation.Id);
+                    }
+                }
+            }
+            var taxcom = taxcomRows.Where(x => !duplicateTaxcom.Contains(x.Id)).ToArray();
             var frontol = group.Where(x => x.Source == Frontol).ToArray();
             if (taxcom.Length == 0 || frontol.Length == 0) continue;
 
@@ -89,7 +111,7 @@ public static class CrossSourceShiftExtensions
             var exactCandidates = (from t in taxcom
                                    from f in frontol
                                    let delta = DeltaSeconds(t.ClosedAt, f.ClosedAt)
-                                   where delta <= toleranceSeconds && MoneyEqual(t, f)
+                                   where delta <= toleranceSeconds && CompatibleRegister(t, f) && MoneyEqual(t, f)
                                    orderby delta, t.ClosedAt, f.ClosedAt, t.Id, f.Id
                                    select new MatchCandidate(t, f, delta)).ToArray();
 
@@ -109,7 +131,7 @@ public static class CrossSourceShiftExtensions
                                       from f in frontol
                                       where !usedFrontol.Contains(f.Id)
                                       let delta = DeltaSeconds(t.ClosedAt, f.ClosedAt)
-                                      where delta <= toleranceSeconds && !MoneyEqual(t, f)
+                                      where delta <= toleranceSeconds && CompatibleRegister(t, f) && !MoneyEqual(t, f)
                                       orderby delta, t.ClosedAt, f.ClosedAt, t.Id, f.Id
                                       select new ConflictCandidate(t, f, delta)).ToArray();
 
@@ -263,11 +285,11 @@ public static class CrossSourceShiftExtensions
         command.Transaction = tx;
         command.CommandText = """
             SELECT s.id,s.source,s.external_id,s.organization_id,o.name,s.location_id,l.name,s.closed_at,
-                   s.total_kopecks,s.cash_kopecks,s.electronic_kopecks,s.fn,s.shift_number
+                   s.total_kopecks,s.cash_kopecks,s.electronic_kopecks,s.fn,s.shift_number,s.kkt_serial
             FROM shift_closures s
             JOIN organizations o ON o.id=s.organization_id
             JOIN locations l ON l.id=s.location_id
-            WHERE s.source IN ('Taxcom.ShiftReport','Frontol.Report')
+            WHERE l.is_active=1 AND s.source IN ('Taxcom.ShiftReport','Frontol.Report')
             ORDER BY s.organization_id,s.location_id,s.closed_at,s.source,s.id
             """;
         using var reader = command.ExecuteReader();
@@ -289,7 +311,7 @@ public static class CrossSourceShiftExtensions
                 reader.GetInt64(9),
                 reader.GetInt64(10),
                 reader.GetString(11),
-                reader.IsDBNull(12) ? null : reader.GetInt32(12)));
+                reader.IsDBNull(12) ? null : reader.GetInt32(12), reader.GetString(13)));
         }
         return result;
     }
@@ -308,6 +330,10 @@ public static class CrossSourceShiftExtensions
         while (reader.Read()) result[reader.GetString(0)] = reader.GetString(1);
         return result;
     }
+
+    private static bool CompatibleRegister(Observation a, Observation b) =>
+        (a.KktSerial.Length == 0 || b.KktSerial.Length == 0 || a.KktSerial == b.KktSerial) &&
+        (a.FiscalDriveNumber.Length == 0 || b.FiscalDriveNumber.Length == 0 || a.FiscalDriveNumber == b.FiscalDriveNumber);
 
     private static bool MoneyEqual(Observation left, Observation right) =>
         left.TotalKopecks == right.TotalKopecks &&

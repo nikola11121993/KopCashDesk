@@ -100,6 +100,7 @@ public sealed class FrontolReportImporter
             }
         }
 
+        _database.RebuildCrossSourceShiftMatches();
         _database.Audit("frontol.report.import",
             $"files={summary.FilesProcessed}; shifts={summary.ShiftsProcessed}; closedDocs={summary.ClosedDocuments}; cancelledDocs={summary.CancelledDocuments}; inserted={summary.FiscalOperationsInserted}; updated={summary.FiscalOperationsUpdated}; skipped={summary.RowsSkipped}; failed={summary.FilesFailed}");
         return summary;
@@ -248,7 +249,7 @@ public sealed class FrontolReportImporter
                 electronic,
                 string.Empty,
                 shiftKey.ShiftNumber,
-                documentId));
+                documentId, RegisterDisplayName: $"Frontol — рабочее место {shiftKey.Workstation}"));
 
             UpsertFiscalPart(externalBase + ":cash", close.ClosedAt, PaymentKind.Cash, cash, documentId, summary);
             UpsertFiscalPart(externalBase + ":electronic", close.ClosedAt, PaymentKind.Electronic, electronic, documentId, summary);

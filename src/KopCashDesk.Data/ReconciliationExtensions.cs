@@ -8,7 +8,7 @@ namespace KopCashDesk.Data;
 
 public static class ReconciliationExtensions
 {
-    private const int AlgorithmVersion = 1;
+    private const int AlgorithmVersion = 2;
 
     private sealed record BankDay(DateOnly Date, long AmountKopecks, int Count);
     private sealed record CashEvent(DateOnly Date, string Source, string ExternalId, long AmountKopecks, string OccurredAt);
@@ -43,6 +43,7 @@ public static class ReconciliationExtensions
         Guid? locationId = null)
     {
         database.EnsureManualTerminalPostings();
+        database.RebuildCrossSourceShiftMatches();
         var organizations = database.Organizations().ToDictionary(x => x.Id);
         var locations = database.Locations()
             .Where(x => organizationId is null || x.OrganizationId == organizationId)
@@ -116,9 +117,10 @@ public static class ReconciliationExtensions
 
         DeleteAllocations(db, transaction, organization.Id, location.Id);
 
-        var actualFiscalDates = fiscalEvents.Select(x => x.Date).ToHashSet();
-        var effectiveCashEvents = fiscalEvents
-            .Concat(manualEvents.Where(x => !actualFiscalDates.Contains(x.Date)))
+        var conflicts = database.CrossSourceConflictDates(organization.Id, location.Id);
+        var manualDates = manualEvents.Select(x => x.Date).ToHashSet();
+        var effectiveCashEvents = fiscalEvents.Where(x => !manualDates.Contains(x.Date))
+            .Concat(manualEvents).Where(x => !conflicts.Contains(x.Date))
             .OrderBy(x => x.Date)
             .ThenBy(x => x.OccurredAt, StringComparer.Ordinal)
             .ThenBy(x => x.Source, StringComparer.Ordinal)
@@ -154,7 +156,7 @@ public static class ReconciliationExtensions
         var priorOutstanding = new Dictionary<DateOnly, long>();
         var endOutstanding = new Dictionary<DateOnly, long>();
         var unmatchedCash = new Dictionary<DateOnly, long>();
-        var reviewDates = new HashSet<DateOnly>();
+        var reviewDates = new HashSet<DateOnly>(conflicts);
 
         foreach (var date in dates)
         {
@@ -238,7 +240,7 @@ public static class ReconciliationExtensions
             allocations, priorOutstanding, endOutstanding, unmatchedCash, reviewDates);
 
         transaction.Commit();
-        return result;
+        return result.Select(x => conflicts.Contains(x.Date) ? x with { RequiresReview = true, Status = "Конфликт источников — требуется проверка" } : x).ToArray();
     }
 
     private static IReadOnlyList<ReconciliationDay> BuildRows(
@@ -432,31 +434,10 @@ public static class ReconciliationExtensions
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            WITH fiscal AS (
-                SELECT
-                    substr(occurred_at,1,10) AS day,
-                    source,
-                    external_id,
-                    amount_kopecks,
-                    occurred_at,
-                    CASE
-                        WHEN source='Taxcom.ShiftReport' THEN 1
-                        WHEN source='Taxcom.FiscalDocuments' THEN 2
-                        WHEN source='Frontol.Report' THEN 3
-                        ELSE 4
-                    END AS priority
-                FROM operations
-                WHERE organization_id=$org AND location_id=$loc AND source_kind='Fiscal' AND payment='Electronic'
-            ),
-            chosen AS (
-                SELECT day,MIN(priority) AS priority
-                FROM fiscal
-                GROUP BY day
-            )
-            SELECT f.day,f.source,f.external_id,f.amount_kopecks,f.occurred_at
-            FROM fiscal f
-            JOIN chosen c ON c.day=f.day AND c.priority=f.priority
-            ORDER BY f.occurred_at,f.source,f.external_id
+            SELECT substr(occurred_at,1,10),source,external_id,amount_kopecks,occurred_at
+            FROM canonical_fiscal_operations
+            WHERE organization_id=$org AND location_id=$loc AND payment='Electronic'
+            ORDER BY occurred_at,source,external_id
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
@@ -507,7 +488,7 @@ public static class ReconciliationExtensions
             rows.Add((DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture), reader.IsDBNull(1) ? null : reader.GetInt32(1)));
 
         return rows
-            .GroupBy(x => DateOnly.FromDateTime(x.ClosedAt.LocalDateTime))
+            .GroupBy(x => DateOnly.FromDateTime(x.ClosedAt.DateTime))
             .Select(g => new ShiftMeta(
                 g.Key,
                 g.Max(x => x.ClosedAt),

@@ -41,9 +41,8 @@ public static class KnownBusinessRules
         var applied = 0;
         foreach (var organization in database.Organizations())
         {
-            applied += TryAlias(database, organization.Id, "Вороний Брод", "Мира 4", "known.voroniy-to-mira", "касса перемещалась: Вороний Брод -> Ленинградская 1 -> Мира 4");
-            applied += TryAlias(database, organization.Id, "Ленинградская 1", "Мира 4", "known.leningradskaya-to-mira", "касса перемещалась: Вороний Брод -> Ленинградская 1 -> Мира 4");
-            applied += TryAlias(database, organization.Id, "Буфет", "Чапаева 28", "known.bufet-to-chapaeva28", "одна физическая точка по адресу Чапаева 28");
+            // Белокаменный кафе -> Ленинградская 1 -> Мира 4 describes a moving KKT,
+            // not aliases for one address. No date-free history merges, including bank/UBRiR rows.
             applied += TryReftinskayaDuplicate(database, organization.Id);
         }
         return applied;
@@ -78,7 +77,17 @@ public static class KnownBusinessRules
 
         var merged = 0;
         foreach (var source in sources)
+        {
+            if (database.RegisterBindings().Any(b => b.LocationId == source.Id && (b.IsLocked || b.BindingSource == BindingSource.Manual))) continue;
+            using var db = Open(database);
+            using var check = db.CreateCommand();
+            database.EnsureManualTerminalPostings();
+            check.CommandText = "SELECT (SELECT COUNT(*) FROM operations WHERE location_id=$loc AND source_kind='Bank') + (SELECT COUNT(*) FROM terminal_bindings WHERE location_id=$loc) + (SELECT COUNT(*) FROM manual_cash_postings WHERE location_id=$loc) + (SELECT COUNT(*) FROM manual_terminal_postings WHERE location_id=$loc)";
+            check.Parameters.AddWithValue("$loc", source.Id.ToString());
+            if (Convert.ToInt64(check.ExecuteScalar()) > 0) continue;
+            if (merged == 0) database.BackupBeforeMigration(4);
             if (database.MergeLocations(source.Id, target.Id, $"правило ККТ {ReftinskayaRegisterSerial} = {ReftinskayaPointName}")) merged++;
+        }
 
         if (merged > 0) MarkApplied(database, ruleKey, $"merged={merged}; target={target.Id}");
         return merged;

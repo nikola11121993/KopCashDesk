@@ -4,7 +4,7 @@ namespace KopCashDesk.Data;
 
 internal static class DatabaseMigrations
 {
-    public const long CurrentVersion = 3;
+    public const long CurrentVersion = 4;
 
     public static void Apply(Database database)
     {
@@ -20,10 +20,15 @@ internal static class DatabaseMigrations
         if (version > CurrentVersion)
             throw new InvalidOperationException("Версия базы данных новее этой программы. Обновите программу.");
 
+        if (version < CurrentVersion)
+            database.BackupBeforeMigration(version);
+
         if (version < 2)
             MigrateToV2(db);
         if (version < 3)
             MigrateToV3(db);
+        if (version < 4)
+            RegisterSchemaMigration.Apply(db);
     }
 
     private static void MigrateToV2(SqliteConnection db)

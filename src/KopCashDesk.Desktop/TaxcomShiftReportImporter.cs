@@ -54,7 +54,7 @@ public sealed class TaxcomShiftReportImporter
     private readonly Guid? _fallbackOrganizationId;
     private List<Organization> _organizations = [];
     private List<Location> _locations = [];
-    private Dictionary<string, RegisterBinding> _registers = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<Guid> _registerIds = [];
 
     public TaxcomShiftReportImporter(Database database, Guid? fallbackOrganizationId = null)
     {
@@ -66,7 +66,7 @@ public sealed class TaxcomShiftReportImporter
     {
         _organizations = _database.Organizations().ToList();
         _locations = _database.Locations().ToList();
-        _registers = _database.RegisterBindings().ToDictionary(RegisterKey, StringComparer.OrdinalIgnoreCase);
+        _registerIds = _database.RegisterBindings().Select(x => x.Id).ToHashSet();
 
         var summary = new TaxcomShiftImportSummary();
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -83,6 +83,7 @@ public sealed class TaxcomShiftReportImporter
             }
         }
 
+        _database.RebuildCrossSourceShiftMatches();
         _database.Audit("taxcom.shift_report.import",
             $"files={summary.FilesProcessed}; shifts={summary.ShiftsProcessed}; inserted={summary.FiscalOperationsInserted}; updated={summary.FiscalOperationsUpdated}; skipped={summary.RowsSkipped}; failed={summary.FilesFailed}");
         return summary;
@@ -225,24 +226,27 @@ public sealed class TaxcomShiftReportImporter
                 continue;
             }
 
-            var location = ResolveLocation(organization, fn, registerNumber, serial, kktName, pointName, summary);
+            var register = RegisterBindingService.Resolve(_database, organization.Id, serial, fn, registerNumber, kktName, pointName, DateOnly.FromDateTime(closedAt.DateTime));
+            if (_registerIds.Add(register.Id) && register.LocationId is not null) summary.RegistersBound++;
+            if (register.LocationId is null && summary.Messages.Count < 12)
+                summary.Messages.Add($"ККТ {kktName} ({serial}, ФН {fn}): требуется привязка; исходные суммы сохранены.");
             var shiftExternalId = BuildShiftExternalId(organization.TaxId, fn, registerNumber, serial, shiftNumber, closedAt);
 
             _database.Save(new ShiftClosure(
                 Source,
                 shiftExternalId,
                 organization.Id,
-                location.Id,
+                register.LocationId,
                 closedAt,
                 total,
                 cash,
                 electronic,
                 fn,
                 shiftNumber,
-                documentId));
+                documentId, serial, registerNumber, kktName));
 
-            UpsertFiscalPart(shiftExternalId + ":cash", organization, location, closedAt, PaymentKind.Cash, cash, documentId, summary);
-            UpsertFiscalPart(shiftExternalId + ":electronic", organization, location, closedAt, PaymentKind.Electronic, electronic, documentId, summary);
+            UpsertFiscalPart(shiftExternalId + ":cash", organization, register, closedAt, PaymentKind.Cash, cash, documentId, summary);
+            UpsertFiscalPart(shiftExternalId + ":electronic", organization, register, closedAt, PaymentKind.Electronic, electronic, documentId, summary);
 
             summary.ShiftsProcessed++;
             summary.CashTotal += cash;
@@ -250,14 +254,14 @@ public sealed class TaxcomShiftReportImporter
             summary.RevenueTotal += total;
 
             if (Money.Normalize(total - (cash + electronic)) != 0m && summary.Messages.Count < 12)
-                summary.Messages.Add($"Смена {shiftNumber}, {location.Name}: выручка {total:N2} ₽ не равна нал+безнал {(cash + electronic):N2} ₽.");
+                summary.Messages.Add($"Смена {shiftNumber}, {register.DisplayName}: выручка {total:N2} ₽ не равна нал+безнал {(cash + electronic):N2} ₽.");
         }
     }
 
     private void UpsertFiscalPart(
         string externalId,
         Organization organization,
-        Location location,
+        RegisterBinding register,
         DateTimeOffset occurredAt,
         PaymentKind payment,
         decimal amount,
@@ -269,13 +273,13 @@ public sealed class TaxcomShiftReportImporter
             Source,
             externalId,
             organization.Id,
-            location.Id,
+            register.LocationId,
             occurredAt,
             SourceKind.Fiscal,
             kind,
             payment,
             amount,
-            documentId));
+            documentId, register.FiscalDriveNumber, register.KktSerial, register.RegisterNumber, register.DisplayName));
 
         if (inserted) summary.FiscalOperationsInserted++;
         else summary.FiscalOperationsUpdated++;
@@ -298,112 +302,6 @@ public sealed class TaxcomShiftReportImporter
         }
 
         throw new InvalidDataException($"В имени файла '{originalName}' не найден ИНН. Выберите организацию в верхней части программы и повторите импорт.");
-    }
-
-    private Location ResolveLocation(
-        Organization organization,
-        string fn,
-        string registerNumber,
-        string serial,
-        string kktName,
-        string pointName,
-        TaxcomShiftImportSummary summary)
-    {
-        var organizationLocations = _locations.Where(x => x.OrganizationId == organization.Id).ToArray();
-        var knownPoint = KnownBusinessRules.PointNameForRegisterSerial(serial) ?? KnownBusinessRules.PointNameForRegisterSerial(kktName);
-        if (knownPoint is not null)
-        {
-            var location = KnownBusinessRules.FindKnownPoint(organizationLocations, knownPoint);
-            if (location is null)
-            {
-                location = new Location(Guid.NewGuid(), organization.Id, knownPoint, string.Empty, false);
-                _database.Save(location);
-                _locations.Add(location);
-                summary.LocationsCreated++;
-            }
-            EnsureRegisterBinding(organization, location, fn, registerNumber, summary, BindingSource.Rule, true);
-            return location;
-        }
-
-        if (!string.IsNullOrWhiteSpace(fn) && _registers.TryGetValue(RegisterKey(organization.Id, fn), out var existingBinding))
-        {
-            var bound = _locations.FirstOrDefault(x => x.Id == existingBinding.LocationId);
-            if (bound is not null) return bound;
-        }
-
-        var preferredName = PreferredPointName(kktName, pointName, fn);
-        var nameKey = Normalize(preferredName);
-
-        var byName = organizationLocations.Where(x => Normalize(x.Name) == nameKey).ToArray();
-        Location? resolved = byName.Length == 1 ? byName[0] : null;
-
-        if (resolved is null && ContainsDigit(preferredName))
-        {
-            var byAddress = organizationLocations
-                .Where(x =>
-                {
-                    var address = Normalize(x.Address);
-                    return !string.IsNullOrWhiteSpace(address) &&
-                           (address.Contains(nameKey, StringComparison.Ordinal) || nameKey.Contains(address, StringComparison.Ordinal));
-                })
-                .ToArray();
-            if (byAddress.Length == 1) resolved = byAddress[0];
-        }
-
-        if (resolved is null)
-        {
-            resolved = new Location(Guid.NewGuid(), organization.Id, preferredName, string.Empty, false);
-            _database.Save(resolved);
-            _locations.Add(resolved);
-            summary.LocationsCreated++;
-        }
-
-        EnsureRegisterBinding(organization, resolved, fn, registerNumber, summary, BindingSource.Automatic, false);
-        return resolved;
-    }
-
-    private void EnsureRegisterBinding(
-        Organization organization,
-        Location location,
-        string fn,
-        string registerNumber,
-        TaxcomShiftImportSummary summary,
-        BindingSource bindingSource,
-        bool isLocked)
-    {
-        if (string.IsNullOrWhiteSpace(fn)) return;
-        var key = RegisterKey(organization.Id, fn);
-        if (_registers.TryGetValue(key, out var existing) &&
-            existing.LocationId == location.Id &&
-            string.Equals(DigitsOnly(existing.RegisterNumber), DigitsOnly(registerNumber), StringComparison.Ordinal) &&
-            existing.BindingSource == bindingSource &&
-            existing.IsLocked == isLocked)
-            return;
-
-        var requested = new RegisterBinding(
-            existing?.Id ?? Guid.NewGuid(), organization.Id, location.Id, fn, registerNumber,
-            bindingSource, isLocked);
-        _database.SaveRegisterBinding(requested);
-
-        var stored = _database.RegisterBindings().FirstOrDefault(x =>
-            x.OrganizationId == organization.Id &&
-            string.Equals(DigitsOnly(x.FiscalDriveNumber), DigitsOnly(fn), StringComparison.Ordinal));
-        if (stored is null) return;
-        _registers[key] = stored;
-
-        if (stored.LocationId == location.Id &&
-            stored.BindingSource == bindingSource &&
-            stored.IsLocked == isLocked)
-            summary.RegistersBound++;
-    }
-
-    private static string PreferredPointName(string kktName, string pointName, string fn)
-    {
-        var kkt = CleanPointName(kktName);
-        if (!IsGenericPoint(kkt)) return kkt;
-        var point = CleanPointName(pointName);
-        if (!IsGenericPoint(point)) return point;
-        return string.IsNullOrWhiteSpace(fn) ? "Неопределённая ККТ" : $"ККТ {fn}";
     }
 
     private static bool IsGenericPoint(string value)
@@ -526,8 +424,6 @@ public sealed class TaxcomShiftReportImporter
     private static string Normalize(string value) => SberAcquiringImporter.NormalizeForMatch(value);
     private static bool ContainsDigit(string value) => value.Any(char.IsDigit);
     private static string DigitsOnly(string value) => new(value.Where(char.IsDigit).ToArray());
-    private static string RegisterKey(RegisterBinding binding) => RegisterKey(binding.OrganizationId, binding.FiscalDriveNumber);
-    private static string RegisterKey(Guid organizationId, string fn) => $"{organizationId:N}|{DigitsOnly(fn)}";
 
     private static string BuildShiftExternalId(string taxId, string fn, string registerNumber, string serial, int shiftNumber, DateTimeOffset closedAt)
     {
