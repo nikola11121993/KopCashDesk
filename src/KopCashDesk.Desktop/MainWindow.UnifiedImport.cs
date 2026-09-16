@@ -6,7 +6,7 @@ public partial class MainWindow
 {
     private void UnifiedImport_Click(object sender, RoutedEventArgs e)
     {
-        var window = new UnifiedImportWindow(
+        var window = new SmartUnifiedImportWindow(
             _db,
             SelectedOrganizationId,
             () =>
