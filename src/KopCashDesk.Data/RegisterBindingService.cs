@@ -47,23 +47,56 @@ public static class RegisterBindingService
     public static RegisterBinding Resolve(Database database, Guid org, string serial, string fn, string rnm, string display, string point, DateOnly day)
     {
         serial = Digits(serial); fn = Digits(fn); rnm = Digits(rnm);
+        var locations = database.Locations().Where(l => l.OrganizationId == org).ToArray();
+        var knownPointName = KnownBusinessRules.PointNameForRegisterSerial(serial);
+        var knownRuleLocation = knownPointName is null ? null : KnownBusinessRules.FindKnownPoint(locations, knownPointName);
+
         var candidates = Read(database).Where(b => b.OrganizationId == org && IdentityRank(b, serial, fn, rnm) > 0).ToArray();
         var valid = candidates.Where(b => InPeriod(b, day)).ToArray();
         RegisterBinding? selected = null;
         if (valid.Length > 0)
         {
-            var locked = valid.Where(b => b.BindingSource == BindingSource.Manual && b.IsLocked).ToArray();
-            var pool = locked.Length > 0 ? locked : valid;
-            var rank = pool.Max(b => IdentityRank(b, serial, fn, rnm));
-            pool = pool.Where(b => IdentityRank(b, serial, fn, rnm) == rank).ToArray();
-            var source = pool.Max(b => (int)b.BindingSource);
-            pool = pool.Where(b => (int)b.BindingSource == source).ToArray();
-            if (pool.Select(b => b.LocationId).Distinct().Count() == 1) selected = pool[0];
-            else return SavePending(database, org, serial, fn, rnm, display, day);
+            // Explicit user decisions always win, even over a hard business rule.
+            var protectedBindings = valid.Where(b => b.BindingSource == BindingSource.Manual || b.IsLocked).ToArray();
+            if (protectedBindings.Length > 0)
+            {
+                var rank = protectedBindings.Max(b => IdentityRank(b, serial, fn, rnm));
+                var pool = protectedBindings.Where(b => IdentityRank(b, serial, fn, rnm) == rank).ToArray();
+                var source = pool.Max(b => (int)b.BindingSource);
+                pool = pool.Where(b => (int)b.BindingSource == source).ToArray();
+                if (pool.Select(b => b.LocationId).Distinct().Count() == 1) selected = pool[0];
+                else return SavePending(database, org, serial, fn, rnm, display, day);
+            }
+            else if (knownPointName is not null)
+            {
+                // A hard serial rule is stronger than any automatic/name-based observation.
+                // If the physical point cannot be identified uniquely, do not guess from the KKT display name.
+                if (knownRuleLocation is null)
+                    return SavePending(database, org, serial, fn, rnm, display, day);
+
+                var rank = valid.Max(b => IdentityRank(b, serial, fn, rnm));
+                var pool = valid.Where(b => IdentityRank(b, serial, fn, rnm) == rank).ToArray();
+                var source = pool.Max(b => (int)b.BindingSource);
+                selected = pool.First(b => (int)b.BindingSource == source) with
+                {
+                    LocationId = knownRuleLocation.Id,
+                    BindingSource = BindingSource.Rule,
+                    IsLocked = false
+                };
+            }
+            else
+            {
+                var rank = valid.Max(b => IdentityRank(b, serial, fn, rnm));
+                var pool = valid.Where(b => IdentityRank(b, serial, fn, rnm) == rank).ToArray();
+                var source = pool.Max(b => (int)b.BindingSource);
+                pool = pool.Where(b => (int)b.BindingSource == source).ToArray();
+                if (pool.Select(b => b.LocationId).Distinct().Count() == 1) selected = pool[0];
+                else return SavePending(database, org, serial, fn, rnm, display, day);
+            }
         }
         if (selected is not null)
         {
-            // Enrich identity without altering location/provenance/validity. A new FN is a new observation identity.
+            // Enrich identity without altering manual provenance/validity. A new FN is a new observation identity.
             if (selected.FiscalDriveNumber.Length > 0 && fn.Length > 0 && selected.FiscalDriveNumber != fn)
                 selected = selected with { Id = Guid.NewGuid(), FiscalDriveNumber = fn, CreatedAt = null, UpdatedAt = null };
             selected = selected with
@@ -76,9 +109,22 @@ public static class RegisterBindingService
             Save(database, selected);
             return selected;
         }
-        // A gap in known history is not authorization to apply today's business rule to an old shift.
+
+        if (knownPointName is not null)
+        {
+            // Hard serial rules apply across gaps in automatic history, but never invent a target point.
+            if (knownRuleLocation is null)
+                return SavePending(database, org, serial, fn, rnm, display, day);
+
+            var known = new RegisterBinding(Guid.NewGuid(), org, knownRuleLocation.Id, fn, rnm, BindingSource.Rule,
+                false, null, null, serial, display);
+            Save(database, known);
+            return known;
+        }
+
+        // A gap in ordinary known history is not authorization to apply today's weaker display/point rule to an old shift.
         if (candidates.Any(b => b.LocationId is not null)) return SavePending(database, org, serial, fn, rnm, display, day);
-        var locations = database.Locations().Where(l => l.OrganizationId == org).ToArray();
+
         var ruleLocation = RuleLocation(database, locations, serial, display);
         Location? location = ruleLocation;
         if (location is null && !IsGenericPoint(point))
@@ -94,6 +140,10 @@ public static class RegisterBindingService
     public static bool IsGenericPoint(string name) => Normalize(name) is "" or "безторговойточки" or "ккт" or "касса" or "неопределеннаяккт";
     internal static Location? RuleLocation(Database database, Location[] locations, string serial, string display)
     {
+        var knownPointName = KnownBusinessRules.PointNameForRegisterSerial(serial);
+        if (knownPointName is not null)
+            return KnownBusinessRules.FindKnownPoint(locations, knownPointName);
+
         using var db = Open(database); using var c = db.CreateCommand();
         c.CommandText = "SELECT identity_kind,identity_value,target_name,target_address FROM register_location_rules ORDER BY identity_kind DESC";
         using var r = c.ExecuteReader();
