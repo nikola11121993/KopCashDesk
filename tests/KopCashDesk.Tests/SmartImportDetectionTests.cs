@@ -73,11 +73,13 @@ public sealed class SmartImportDetectionTests
     }
 
     [Theory]
-    [InlineData("42526205", "ЗАВОД АТИ")]
+    [InlineData("42526205", "Кулинария Аппетит")]
     [InlineData("34723825", "Столовая АТИ")]
     [InlineData("34773474", "Рефтинская ГРЭС 6 столовая")]
     [InlineData("42162000", "Чапаева 28")]
     [InlineData("45080359", "Ладыженского 7")]
+    [InlineData("39413112", "Музыкальный колледж")]
+    [InlineData("42638079", "Мира 4 (неактив.)")]
     public void KnownTerminal_UsesPhysicalPoint(string terminal, string expected)
         => Assert.Equal(expected, SmartSberAcquiringImporter.CanonicalPointNameForTerminal(terminal));
 
