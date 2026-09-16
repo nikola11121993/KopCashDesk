@@ -67,8 +67,8 @@
           <Button Content="Организации" Tag="organizations" Click="Navigate_Click"/>
           <Button Content="Точки и ККТ" Click="Registers_Click"/>
           <Button Content="Терминалы" Click="Terminals_Click"/>
-          <Button Content="Свод" Click="Summary_Click"/>
-          <Button Content="Сверка касса ↔ терминал" Click="Reconciliation_Click"/>
+          <Button Content="Свод" Click="ModernSummary_Click"/>
+          <Button Content="Сверка касса ↔ терминал" Click="ModernReconciliation_Click"/>
           <Button Content="Операции" Tag="operations" Click="Navigate_Click"/>
           <Separator Margin="4,9"/>
           <Button Content="Импорт файлов" Click="UnifiedImport_Click" ToolTip="Сбер ZIP/XLSX, Такском XLSX/ZIP, Frontol report.txt и CRPT"/>
@@ -79,7 +79,7 @@
         <DockPanel Margin="0,0,0,12">
           <StackPanel>
             <TextBlock x:Name="PageTitle" Text="Свод" FontSize="24" FontWeight="SemiBold"/>
-            <TextBlock x:Name="PageSubtitle" Text="Терминалы и касса по торговым точкам" Foreground="#64748B" Margin="0,4,0,0"/>
+            <TextBlock x:Name="PageSubtitle" Text="Терминалы и касса по торговым точкам" Foreground="#64748B" Margin="0,4,0,0" TextWrapping="Wrap"/>
           </StackPanel>
           <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
             <Button x:Name="PrimaryButton" Content="Добавить" Click="PrimaryButton_Click" Visibility="Collapsed"/>
