@@ -40,6 +40,25 @@ public sealed class FixedSevenPointPolicyTests
     }
 
     [Fact]
+    public void UnexpectedEighthPoint_IsDeactivatedWithoutDeletingItsData()
+    {
+        using var f = new Fixture();
+        var extra = new Location(Guid.NewGuid(), f.Org.Id, "Случайно созданная восьмая точка");
+        f.Db.Save(extra);
+        f.Db.Insert(new CashOperation(
+            "Legacy", "extra-op", f.Org.Id, extra.Id,
+            new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
+            SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 123m));
+
+        SmartKnownRules.PrepareCleanDatabase(f.Db);
+
+        Assert.Equal(7, f.Db.Locations().Count(x => x.OrganizationId == f.Org.Id));
+        var stored = Assert.Single(f.Db.Locations(includeInactive: true), x => x.Id == extra.Id);
+        Assert.False(stored.IsActive);
+        Assert.Equal(123m, f.Db.SumOperations("Legacy", f.Org.Id));
+    }
+
+    [Fact]
     public void SevenKktSerials_AreHardMapped_And9015DoesNotExist()
     {
         Assert.Equal(KnownBusinessRules.ReftinskayaPointName, KnownBusinessRules.PointNameForRegisterSerial("00106900361561"));
@@ -50,6 +69,7 @@ public sealed class FixedSevenPointPolicyTests
         Assert.Equal(KnownBusinessRules.ChapaevaPointName, KnownBusinessRules.PointNameForRegisterSerial("08052160"));
         Assert.Equal(KnownBusinessRules.MusicCollegePointName, KnownBusinessRules.PointNameForRegisterSerial("00178241"));
         Assert.False(KnownBusinessRules.IsKnownRegisterSerial("00179015"));
+        Assert.Null(KnownBusinessRules.PointNameForRegisterSerial("00179015"));
     }
 
     private sealed class Fixture : IDisposable
