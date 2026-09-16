@@ -42,10 +42,9 @@ public sealed class SmartSberImportSummary
 }
 
 /// <summary>
-/// Imports all Sber acquiring layouts seen in production: the full common report,
-/// the short settlement report and the reimbursement report.  The external id is
-/// based on terminal + RRN + business day + amount + operation kind, therefore the
-/// same transaction appearing in several report layouts is inserted only once.
+/// Imports all Sber acquiring layouts seen in production. Only terminals which are already
+/// manually bound or belong to the user-confirmed seven physical/reporting points are accepted.
+/// Unknown terminals are skipped so an import can never invent an eighth point.
 /// </summary>
 public sealed class SmartSberAcquiringImporter
 {
@@ -59,46 +58,51 @@ public sealed class SmartSberAcquiringImporter
     private static readonly IReadOnlyDictionary<string, string> KnownTerminalPoints =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            // ATI: these names are deliberately physical locations, not KKT display names.
-            ["42526205"] = "ЗАВОД АТИ",
-            ["42526204"] = "ЗАВОД АТИ",
-            ["34723825"] = "Столовая АТИ",
-            ["34723835"] = "Столовая АТИ",
-            ["34723837"] = "Столовая АТИ",
+            // Кулинария Аппетит, ККТ 00301000370264.
+            ["42526205"] = KnownBusinessRules.AtiAppetitPointName,
+            ["42526204"] = KnownBusinessRules.AtiAppetitPointName,
 
-            // One physical point / several payment methods or replacement TIDs.
-            ["34765811"] = "Рефтинская ГРЭС 6 столовая",
-            ["34765817"] = "Рефтинская ГРЭС 6 столовая",
-            ["34773474"] = "Рефтинская ГРЭС 6 столовая",
-            ["39413044"] = "Ладыженского 7",
-            ["39413045"] = "Ладыженского 7",
-            ["39413043"] = "Ладыженского 7",
-            ["45080359"] = "Ладыженского 7",
-            ["45080360"] = "Ладыженского 7",
-            ["45080361"] = "Ладыженского 7",
-            ["39413112"] = "Колледж искусств",
-            ["39413114"] = "Колледж искусств",
-            ["39413113"] = "Колледж искусств",
-            ["43151534"] = "Мира 4",
-            ["43151535"] = "Мира 4",
-            ["43151533"] = "Мира 4",
-            ["42162000"] = "Чапаева 28",
-            ["42162001"] = "Чапаева 28",
-            ["42161999"] = "Чапаева 28",
-            ["45080612"] = "Чапаева 28",
-            ["45080613"] = "Чапаева 28",
-            ["45080614"] = "Чапаева 28",
-            ["42830544"] = "Столовая 5",
-            ["42830545"] = "Столовая 5",
-            ["42830543"] = "Столовая 5",
-            ["44876543"] = "Столовая Аппетит",
-            ["44876544"] = "Столовая Аппетит",
-            ["44876542"] = "Столовая Аппетит",
-            ["39413189"] = "Ленинградская 1",
-            ["39413190"] = "Ленинградская 1",
-            ["42638079"] = "Вороний Брод",
-            ["42638078"] = "Вороний Брод",
-            ["42638080"] = "Вороний Брод"
+            // Столовая АТИ, ККТ 08050950.
+            ["34723825"] = KnownBusinessRules.AtiMercuryPointName,
+            ["34723835"] = KnownBusinessRules.AtiMercuryPointName,
+            ["34723837"] = KnownBusinessRules.AtiMercuryPointName,
+
+            // Рефтинская ГРЭС 6 столовая.
+            ["34765811"] = KnownBusinessRules.ReftinskayaPointName,
+            ["34765817"] = KnownBusinessRules.ReftinskayaPointName,
+            ["34773474"] = KnownBusinessRules.ReftinskayaPointName,
+
+            // Ладыженского 7.
+            ["39413044"] = KnownBusinessRules.LadyzhenskogoPointName,
+            ["39413045"] = KnownBusinessRules.LadyzhenskogoPointName,
+            ["39413043"] = KnownBusinessRules.LadyzhenskogoPointName,
+            ["45080359"] = KnownBusinessRules.LadyzhenskogoPointName,
+            ["45080360"] = KnownBusinessRules.LadyzhenskogoPointName,
+            ["45080361"] = KnownBusinessRules.LadyzhenskogoPointName,
+
+            // Музыкальный колледж.
+            ["39413112"] = KnownBusinessRules.MusicCollegePointName,
+            ["39413114"] = KnownBusinessRules.MusicCollegePointName,
+            ["39413113"] = KnownBusinessRules.MusicCollegePointName,
+
+            // Чапаева 28.
+            ["42162000"] = KnownBusinessRules.ChapaevaPointName,
+            ["42162001"] = KnownBusinessRules.ChapaevaPointName,
+            ["42161999"] = KnownBusinessRules.ChapaevaPointName,
+            ["45080612"] = KnownBusinessRules.ChapaevaPointName,
+            ["45080613"] = KnownBusinessRules.ChapaevaPointName,
+            ["45080614"] = KnownBusinessRules.ChapaevaPointName,
+
+            // One historical KKT/point chain: Вороний Брод -> Ленинградская 1 -> Мира 4.
+            // All bank history is intentionally consolidated into the closed reporting point.
+            ["43151534"] = KnownBusinessRules.MiraPointName,
+            ["43151535"] = KnownBusinessRules.MiraPointName,
+            ["43151533"] = KnownBusinessRules.MiraPointName,
+            ["39413189"] = KnownBusinessRules.MiraPointName,
+            ["39413190"] = KnownBusinessRules.MiraPointName,
+            ["42638079"] = KnownBusinessRules.MiraPointName,
+            ["42638078"] = KnownBusinessRules.MiraPointName,
+            ["42638080"] = KnownBusinessRules.MiraPointName
         };
 
     public SmartSberAcquiringImporter(Database database) => _database = database;
@@ -300,7 +304,7 @@ public sealed class SmartSberAcquiringImporter
             {
                 summary.RowsSkipped++;
                 if (summary.Messages.Count < 12)
-                    summary.Messages.Add($"TID {terminalId}: не удалось однозначно определить торговую точку; строка пропущена.");
+                    summary.Messages.Add($"TID {terminalId}: терминал не известен и не привязан вручную — строка пропущена.");
                 continue;
             }
 
@@ -347,36 +351,19 @@ public sealed class SmartSberAcquiringImporter
                 return current;
         }
 
+        // Never trust a new TST name/address to create a point. Only a confirmed TID or a manual binding is accepted.
         var canonical = CanonicalPointNameForTerminal(terminalId);
-        var pointName = canonical ?? SberAcquiringImporter.CleanPointName(sourcePointName);
-        var orgLocations = _locations.Where(x => x.OrganizationId == organization.Id && x.IsActive).ToArray();
+        if (canonical is null) return null;
 
-        if (!string.IsNullOrWhiteSpace(pointName))
-        {
-            var key = SberAcquiringImporter.NormalizeForMatch(pointName);
-            var sameName = orgLocations.Where(x => SberAcquiringImporter.NormalizeForMatch(x.Name) == key).ToArray();
-            if (sameName.Length == 1) return sameName[0];
-            if (sameName.Length > 1)
-            {
-                var addressKey = SberAcquiringImporter.NormalizeForMatch(sourceAddress);
-                var exact = sameName.Where(x => SberAcquiringImporter.NormalizeForMatch(x.Address) == addressKey).ToArray();
-                return exact.Length == 1 ? exact[0] : null;
-            }
-        }
+        var key = SberAcquiringImporter.NormalizeForMatch(canonical);
+        var matches = _locations.Where(x => x.OrganizationId == organization.Id && x.IsActive &&
+            SberAcquiringImporter.NormalizeForMatch(x.Name) == key).ToArray();
+        if (matches.Length == 1) return matches[0];
+        if (matches.Length > 1) return null;
 
-        if (string.IsNullOrWhiteSpace(pointName))
-        {
-            var addressKey = SberAcquiringImporter.NormalizeForMatch(sourceAddress);
-            if (!string.IsNullOrWhiteSpace(addressKey))
-            {
-                var byAddress = orgLocations.Where(x => SberAcquiringImporter.NormalizeForMatch(x.Address) == addressKey).ToArray();
-                if (byAddress.Length == 1) return byAddress[0];
-            }
-            return null;
-        }
-
-        var created = new Location(
-            Guid.NewGuid(), organization.Id, pointName, CleanAddress(sourceAddress), ShouldAutoExclude(pointName));
+        // Known TIDs are allowed to create only their confirmed canonical point. Source address is intentionally
+        // ignored: reports have contained wrong house numbers (for example 64 instead of 62 for Кулинария Аппетит).
+        var created = new Location(Guid.NewGuid(), organization.Id, canonical);
         _database.Save(created);
         _locations.Add(created);
         summary.LocationsCreated++;
@@ -399,7 +386,8 @@ public sealed class SmartSberAcquiringImporter
             {
                 LocationId = location.Id,
                 MerchantId = string.IsNullOrWhiteSpace(merchantId) ? existing.MerchantId : merchantId,
-                PaymentMethod = paymentMethod
+                PaymentMethod = paymentMethod,
+                BindingSource = BindingSource.Rule
             };
             _database.Save(updated);
             _terminals[key] = updated;
@@ -407,7 +395,8 @@ public sealed class SmartSberAcquiringImporter
         }
 
         var created = new TerminalBinding(
-            Guid.NewGuid(), organization.Id, location.Id, "Sber", terminalId, merchantId, paymentMethod);
+            Guid.NewGuid(), organization.Id, location.Id, "Sber", terminalId, merchantId, paymentMethod,
+            BindingSource.Rule);
         _database.Save(created);
         _terminals[key] = created;
         summary.TerminalsCreated++;
@@ -546,9 +535,6 @@ public sealed class SmartSberAcquiringImporter
 
     private static string HashBytes(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     private static string DigitsOnly(string value) => new((value ?? string.Empty).Where(char.IsDigit).ToArray());
-    private static string CleanAddress(string value) => string.Join(", ", (value ?? string.Empty).Split(',').Select(x => x.Trim()).Where(x => x.Length > 0));
-    private static bool ShouldAutoExclude(string pointName) =>
-        SberAcquiringImporter.NormalizeForMatch(pointName) is "столовая 5" or "столовая аппетит";
     private static string TerminalKey(TerminalBinding terminal) => TerminalKey(terminal.OrganizationId, terminal.TerminalId);
     private static string TerminalKey(Guid organizationId, string terminalId) => $"{organizationId:N}|Sber|{DigitsOnly(terminalId)}";
 }
