@@ -16,9 +16,9 @@ public sealed class RegisterBindingRegressionTests
     public void TwoKkt_3457Plus100_SummaryAndBreakdownAre3557()
     {
         using var f = new Fixture();
-        f.Import("Меркурий 180Ф", "111", "991", 3457, 415, "31.08.2026 15:00:00");
-        f.Import("Меркурий 180Ф", "111", "991", 0, 416, "31.08.2026 15:10:00");
-        f.Import("Кулинария Аппетит", "222", "992", 100, 10, "31.08.2026 15:11:00");
+        f.Import("Меркурий 180Ф", "111", "991", 3457, 415, "31.08.2026 15:00:00", point: "Столовая АТИ");
+        f.Import("Меркурий 180Ф", "111", "991", 0, 416, "31.08.2026 15:10:00", point: "Столовая АТИ");
+        f.Import("Кулинария Аппетит", "222", "992", 100, 10, "31.08.2026 15:11:00", point: "Столовая АТИ");
         var day = Assert.Single(f.Db.CanonicalPointDaySummaries());
         Assert.Equal(3557m, day.FiscalElectronic); Assert.Equal(3, day.ShiftCount); Assert.Equal(f.Point.Id, day.LocationId);
         var rows = f.Db.ShiftDetails(f.Org.Id, f.Point.Id, new DateOnly(2026, 8, 31));
@@ -89,13 +89,13 @@ public sealed class RegisterBindingRegressionTests
     [Fact]
     public void RepeatedImport_DoesNotMultiplyRegistersLocationsShiftsOrLinks()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 100); f.Import("Меркурий 180Ф", "111", "991", 100);
+        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ"); f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ");
         Assert.Single(f.Db.RegisterBindings()); Assert.Single(f.Db.Locations()); Assert.Single(f.Db.ShiftDetails(f.Org.Id, f.Point.Id)); Assert.Empty(f.Db.CrossSourceShiftLinks());
     }
     [Fact]
     public void IndependentFrontolAndTaxcom_ShiftSourcesBothContributeToFifo()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 3457);
+        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 3457, point: "Столовая АТИ");
         f.Shift("Frontol.Report", "frontol", new DateTimeOffset(2026, 8, 31, 18, 0, 0, TimeSpan.FromHours(5)), 100);
         f.Db.Insert(new("UBRiR", "historic", f.Org.Id, f.Point.Id, new DateTimeOffset(2026, 8, 31, 10, 0, 0, TimeSpan.FromHours(5)), SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 3557));
         Assert.Equal(3557m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
@@ -104,7 +104,7 @@ public sealed class RegisterBindingRegressionTests
     [Fact]
     public void SourceConflict_DoesNotProduceCashOrFifoAllocations()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 75952, 1, "09.06.2026 15:00:00");
+        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 75952, 1, "09.06.2026 15:00:00", point: "Столовая АТИ");
         f.Shift("Frontol.Report", "frontol", new DateTimeOffset(2026, 6, 9, 15, 1, 0, TimeSpan.FromHours(5)), 96101);
         var day = Assert.Single(f.Db.PointDaySummaries()); Assert.True(day.HasSourceConflict); Assert.Null(day.FiscalElectronic);
         Assert.Equal(2, f.Db.ShiftDetails(f.Org.Id, f.Point.Id).Count); Assert.Empty(f.Db.ReconciliationAllocations(f.Org.Id, f.Point.Id));
@@ -112,7 +112,7 @@ public sealed class RegisterBindingRegressionTests
     [Fact]
     public void ExactCrossSourceDuplicate_CountsOnceInDayMonthYearAndFifo()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 59460, 1, "10.06.2026 15:00:00");
+        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 59460, 1, "10.06.2026 15:00:00", point: "Столовая АТИ");
         f.Shift("Frontol.Report", "frontol", new DateTimeOffset(2026, 6, 10, 15, 1, 0, TimeSpan.FromHours(5)), 59460);
         Assert.Equal(59460m, Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026)).FiscalElectronic);
         Assert.Equal(59460m, Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026, 6)).FiscalElectronic);
@@ -130,12 +130,15 @@ public sealed class RegisterBindingRegressionTests
     [Fact]
     public void PseudoPointRepair_IsIdempotent_AndSoftMergedPointDisappears()
     {
-        using var f = new Fixture(); var pseudo = new Location(Guid.NewGuid(), f.Org.Id, "Меркурий 180Ф"); f.Db.Save(pseudo);
+        using var f = new Fixture();
+        var target = new Location(Guid.NewGuid(), f.Org.Id, "Ладыженского 7", "Ладыженского 7");
+        var pseudo = new Location(Guid.NewGuid(), f.Org.Id, "Ладыженского, 7");
+        f.Db.Save(target); f.Db.Save(pseudo);
         f.Db.SaveRegisterBinding(new(Guid.NewGuid(), f.Org.Id, pseudo.Id, "991"));
         f.Shift("Taxcom.ShiftReport", "old", new DateTimeOffset(2026, 8, 31, 15, 0, 0, TimeSpan.FromHours(5)), 3457, pseudo.Id, "991");
         Assert.Equal(1, f.Db.RepairRegisterLocations()); Assert.Equal(0, f.Db.RepairRegisterLocations());
-        Assert.Single(f.Db.Locations()); Assert.False(Assert.Single(f.Db.Locations(true), x => x.Id == pseudo.Id).IsActive);
-        Assert.Equal(f.Point.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId); Assert.Equal(2, f.Db.CountOperations());
+        Assert.False(Assert.Single(f.Db.Locations(true), x => x.Id == pseudo.Id).IsActive);
+        Assert.Equal(target.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId); Assert.Equal(2, f.Db.CountOperations());
     }
     [Fact]
     public void HistoricBelokamennyLeningradskayaAndUbrir_AreNotMergedOrDropped()
@@ -148,7 +151,7 @@ public sealed class RegisterBindingRegressionTests
     [Fact]
     public void MigrationReentry_PreservesAmountsBindingsAndSourceRows()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 100);
+        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ");
         var count = f.Db.CountOperations(); var binding = Assert.Single(f.Db.RegisterBindings()); f.Db.Initialize(); f.Db.Initialize();
         Assert.Equal(count, f.Db.CountOperations()); Assert.Equal(binding, Assert.Single(f.Db.RegisterBindings())); Assert.Equal(100m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
     }
