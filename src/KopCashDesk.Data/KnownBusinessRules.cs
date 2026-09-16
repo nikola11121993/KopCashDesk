@@ -11,6 +11,7 @@ public static class KnownBusinessRules
     public const string AtiAppetitRegisterSerial = "00301000370264";
     public const string AtiAppetitPointName = "ЗАВОД АТИ";
     public const string AtiMercuryRegisterSerial = "08050950";
+    // Legacy name from older imports. It is the same physical point as ЗАВОД АТИ.
     public const string AtiMercuryPointName = "Столовая АТИ";
 
     public static string? PointNameForRegisterSerial(string serial)
@@ -20,7 +21,7 @@ public static class KnownBusinessRules
         {
             ReftinskayaRegisterSerial => ReftinskayaPointName,
             AtiAppetitRegisterSerial => AtiAppetitPointName,
-            AtiMercuryRegisterSerial => AtiMercuryPointName,
+            AtiMercuryRegisterSerial => AtiAppetitPointName,
             _ => null
         };
     }
@@ -55,8 +56,19 @@ public static class KnownBusinessRules
         var backupTaken = false;
         foreach (var organization in database.Organizations())
         {
+            // User-confirmed physical identity: "ЗАВОД АТИ" and "Столовая АТИ" are one point.
+            // Merge the legacy alias first so bank operations, terminal bindings and fiscal data
+            // all end up on the same location, rather than merely rebinding the KKT.
+            applied += TryAlias(
+                database,
+                organization.Id,
+                AtiMercuryPointName,
+                AtiAppetitPointName,
+                "known.ati-single-physical-point.v1",
+                "ЗАВОД АТИ и Столовая АТИ — одна физическая точка");
+
             applied += TryKnownRegisterLocation(database, organization.Id, AtiAppetitRegisterSerial, AtiAppetitPointName, ref backupTaken);
-            applied += TryKnownRegisterLocation(database, organization.Id, AtiMercuryRegisterSerial, AtiMercuryPointName, ref backupTaken);
+            applied += TryKnownRegisterLocation(database, organization.Id, AtiMercuryRegisterSerial, AtiAppetitPointName, ref backupTaken);
 
             // Белокаменный кафе -> Ленинградская 1 -> Мира 4 describes a moving KKT,
             // not aliases for one address. No date-free history merges, including bank/UBRiR rows.
@@ -87,7 +99,7 @@ public static class KnownBusinessRules
                 target_address=excluded.target_address;
             """;
         command.Parameters.AddWithValue("$mercury", AtiMercuryRegisterSerial);
-        command.Parameters.AddWithValue("$mercuryPoint", AtiMercuryPointName);
+        command.Parameters.AddWithValue("$mercuryPoint", AtiAppetitPointName);
         command.Parameters.AddWithValue("$appetit", AtiAppetitRegisterSerial);
         command.Parameters.AddWithValue("$appetitPoint", AtiAppetitPointName);
         command.ExecuteNonQuery();
