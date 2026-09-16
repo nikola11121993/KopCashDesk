@@ -108,6 +108,7 @@ public static class KnownBusinessRules
 
             EnsureSevenLocations(database, organization.Id);
             MergeConfirmedAliases(database, organization.Id);
+            DeactivateUnexpectedLocations(database, organization.Id);
             RemoveNonexistent9015(database, organization.Id);
 
             applied += TryKnownRegisterLocation(database, organization.Id, ReftinskayaRegisterSerial, ReftinskayaPointName, ref backupTaken);
@@ -174,6 +175,18 @@ public static class KnownBusinessRules
         MergeAlias(database, organizationId, "Белокаменный Кафе", MiraPointName, "история ККТ 00178945");
         MergeAlias(database, organizationId, "Белокаменный Кафе / BUFET", MiraPointName, "история ККТ 00178945");
         MergeAlias(database, organizationId, "BUFET", MiraPointName, "история ККТ 00178945");
+    }
+
+    private static void DeactivateUnexpectedLocations(Database database, Guid organizationId)
+    {
+        var allowed = FixedPointNames.Select(Normalize).ToHashSet(StringComparer.Ordinal);
+        foreach (var location in database.Locations().Where(x => x.OrganizationId == organizationId && x.IsActive).ToArray())
+        {
+            if (allowed.Contains(Normalize(location.Name))) continue;
+            database.Save(location with { IsActive = false, MergedIntoLocationId = null });
+            database.Audit("location.fixed-seven.deactivate",
+                $"location={location.Id}; name={location.Name}; reason=ООО ЦОП использует только 7 подтверждённых точек; данные сохранены, точка скрыта до ручного решения");
+        }
     }
 
     private static void MergeAlias(Database database, Guid organizationId, string sourceName, string targetName, string reason)
