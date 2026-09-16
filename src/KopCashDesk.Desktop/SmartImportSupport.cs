@@ -133,49 +133,36 @@ public static class SmartReportDetector
 
 public static class SmartKnownRules
 {
-    public const string CopTaxId = "6683009222";
-    public const string BelokamennyRegisterSerial = "00179015";
-    public const string BelokamennyPointName = "Вороний Брод";
+    public const string CopTaxId = KnownBusinessRules.CopTaxId;
 
     public static void PrepareCleanDatabase(Database database)
     {
         var org = database.Organizations().FirstOrDefault(x => Digits(x.TaxId) == CopTaxId);
         if (org is null) return;
 
-        // These are known physical points used by serial/display rules. Creating only a missing exact
-        // target is safer than letting a KKT name create a similarly named duplicate later.
-        EnsureLocation(database, org.Id, KnownBusinessRules.AtiAppetitPointName);
-        EnsureLocation(database, org.Id, KnownBusinessRules.AtiMercuryPointName);
-        EnsureLocation(database, org.Id, KnownBusinessRules.ReftinskayaPointName);
-        EnsureLocation(database, org.Id, "Ладыженского 7");
-        EnsureLocation(database, org.Id, "Колледж искусств");
-        EnsureLocation(database, org.Id, "Чапаева 28");
-        EnsureLocation(database, org.Id, "Мира 4");
-        var voron = EnsureLocation(database, org.Id, BelokamennyPointName);
-
-        // "Белокаменный Кафе / BUFET / Вороний Брод" is one physical point.
-        // A rule binding keeps its fiscal KKT on that point without name-only guessing.
-        var existing = database.RegisterBindings().Where(x => x.OrganizationId == org.Id && x.KktSerial == BelokamennyRegisterSerial && x.IsActive).ToArray();
-        if (!existing.Any(x => x.BindingSource == BindingSource.Manual || x.IsLocked))
-        {
-            database.SaveRegisterBinding(new RegisterBinding(
-                existing.FirstOrDefault()?.Id ?? Guid.NewGuid(), org.Id, voron.Id,
-                existing.FirstOrDefault()?.FiscalDriveNumber ?? string.Empty,
-                existing.FirstOrDefault()?.RegisterNumber ?? string.Empty,
-                BindingSource.Rule, false, null, null,
-                BelokamennyRegisterSerial, "Белокаменный Кафе"));
-        }
+        // The user confirmed exactly seven physical/reporting points. Only these may be created automatically.
+        foreach (var name in KnownBusinessRules.FixedPointNames)
+            EnsureLocation(database, org.Id, name);
 
         KnownBusinessRules.ApplyPending(database);
     }
 
     private static Location EnsureLocation(Database database, Guid organizationId, string name)
     {
-        var matches = database.Locations().Where(x => x.OrganizationId == organizationId && x.IsActive &&
+        var all = database.Locations(includeInactive: true).Where(x => x.OrganizationId == organizationId &&
             Normalize(x.Name) == Normalize(name)).ToArray();
-        if (matches.Length == 1) return matches[0];
-        if (matches.Length > 1) return matches[0]; // do not create a third duplicate; existing ambiguity remains visible to the user.
-        var location = new Location(Guid.NewGuid(), organizationId, name);
+        var location = all.FirstOrDefault(x => x.IsActive) ?? all.FirstOrDefault();
+        if (location is not null)
+        {
+            if (!location.IsActive || location.IsExcluded || location.MergedIntoLocationId is not null || location.Name != name)
+            {
+                location = location with { Name = name, IsActive = true, IsExcluded = false, MergedIntoLocationId = null };
+                database.Save(location);
+            }
+            return location;
+        }
+
+        location = new Location(Guid.NewGuid(), organizationId, name);
         database.Save(location);
         return location;
     }
@@ -212,10 +199,13 @@ public sealed class UbrdDailyImporter
     {
         var org = _database.Organizations().FirstOrDefault(x => Digits(x.TaxId) == SmartKnownRules.CopTaxId)
             ?? throw new InvalidDataException("Для УБРиР не найдена организация ИНН 6683009222. Сначала загрузите отчёты Сбер.");
-        var location = _database.Locations().FirstOrDefault(x => x.OrganizationId == org.Id && x.IsActive &&
-                           Normalize(x.Name) == Normalize(SmartKnownRules.BelokamennyPointName))
-            ?? new Location(Guid.NewGuid(), org.Id, SmartKnownRules.BelokamennyPointName);
-        if (!_database.Locations().Any(x => x.Id == location.Id)) _database.Save(location);
+
+        // UBRiR TID 26204835 belongs to the same historical chain as KKT 00178945:
+        // Вороний Брод -> Ленинградская 1 -> Мира 4. The combined reporting point is Мира 4 (неактив.).
+        SmartKnownRules.PrepareCleanDatabase(_database);
+        var location = _database.Locations().SingleOrDefault(x => x.OrganizationId == org.Id && x.IsActive &&
+                           Normalize(x.Name) == Normalize(KnownBusinessRules.MiraPointName))
+            ?? throw new InvalidDataException("Не найдена фиксированная точка «Мира 4 (неактив.)».");
         _database.Save(new TerminalBinding(Guid.NewGuid(), org.Id, location.Id, "UBRiR", TerminalId, string.Empty, "POS", BindingSource.Rule));
 
         var hash = HashFile(path);
