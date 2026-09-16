@@ -40,6 +40,21 @@ public sealed class SmartUnifiedImportWindow : Window
     private readonly TextBlock _result = new();
     private readonly Button _importButton = new();
     private readonly Button _assignButton = new();
+    private readonly ProgressBar _progressBar = new()
+    {
+        Height = 18,
+        Minimum = 0,
+        Maximum = 100,
+        Visibility = Visibility.Collapsed,
+        Margin = new Thickness(0, 12, 0, 0)
+    };
+    private readonly TextBlock _progressText = new()
+    {
+        Visibility = Visibility.Collapsed,
+        Margin = new Thickness(0, 6, 0, 0),
+        Foreground = Brushes.DimGray,
+        TextWrapping = TextWrapping.Wrap
+    };
 
     public SmartUnifiedImportWindow(Database database, Guid? fallbackOrganizationId, Action afterImport)
     {
@@ -56,7 +71,7 @@ public sealed class SmartUnifiedImportWindow : Window
         Background = Brushes.White;
         AllowDrop = true;
         DragOver += (_, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
-        Drop += (_, e) => { if (e.Data.GetData(DataFormats.FileDrop) is string[] paths) AddFiles(paths); };
+        Drop += async (_, e) => { if (e.Data.GetData(DataFormats.FileDrop) is string[] paths) await AddFilesAsync(paths); };
 
         var root = new Grid { Margin = new Thickness(22) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -75,14 +90,20 @@ public sealed class SmartUnifiedImportWindow : Window
 
         var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
         var add = new Button { Content = "Добавить файлы...", Padding = new Thickness(16, 8, 16, 8), Margin = new Thickness(0, 0, 8, 0) };
-        add.Click += (_, _) => ChooseFiles();
+        add.Click += async (_, _) => await ChooseFilesAsync();
         _assignButton.Content = "Назначить Frontol...";
         _assignButton.Padding = new Thickness(16, 8, 16, 8);
         _assignButton.Margin = new Thickness(0, 0, 8, 0);
         _assignButton.IsEnabled = false;
         _assignButton.Click += (_, _) => AssignFrontol();
         var clear = new Button { Content = "Очистить", Padding = new Thickness(16, 8, 16, 8) };
-        clear.Click += (_, _) => { _files.Clear(); RefreshGrid(); _result.Text = "Добавьте отчёты."; };
+        clear.Click += (_, _) =>
+        {
+            _files.Clear();
+            RefreshGrid();
+            _result.Text = "Добавьте отчёты.";
+            HideProgress();
+        };
         tools.Children.Add(add); tools.Children.Add(_assignButton); tools.Children.Add(clear);
         Grid.SetRow(tools, 1); root.Children.Add(tools);
 
@@ -95,6 +116,8 @@ public sealed class SmartUnifiedImportWindow : Window
         resultPanel.Children.Add(new TextBlock { Text = "Результат", FontSize = 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 10) });
         _result.Text = "Добавьте отчёты."; _result.TextWrapping = TextWrapping.Wrap;
         resultPanel.Children.Add(_result);
+        resultPanel.Children.Add(_progressText);
+        resultPanel.Children.Add(_progressBar);
         var resultBorder = new Border
         {
             BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5), Padding = new Thickness(14), Margin = new Thickness(12, 0, 0, 0),
@@ -130,7 +153,7 @@ public sealed class SmartUnifiedImportWindow : Window
         menu.Items.Add(assign); menu.Items.Add(remove); _grid.ContextMenu = menu;
     }
 
-    private void ChooseFiles()
+    private async Task ChooseFilesAsync()
     {
         var dialog = new OpenFileDialog
         {
@@ -138,23 +161,47 @@ public sealed class SmartUnifiedImportWindow : Window
             Multiselect = true,
             Title = "Выберите отчёты"
         };
-        if (dialog.ShowDialog(this) == true) AddFiles(dialog.FileNames);
+        if (dialog.ShowDialog(this) == true) await AddFilesAsync(dialog.FileNames);
     }
 
-    private void AddFiles(IEnumerable<string> paths)
+    private async Task AddFilesAsync(IEnumerable<string> paths)
     {
+        var pending = paths
+            .Where(path => !_files.Any(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        if (pending.Length == 0) return;
+
         var unknown = new List<string>();
-        foreach (var path in paths)
+        Cursor = Cursors.Wait;
+        ShowDeterminateProgress(0, $"Определяю форматы: 0 из {pending.Length}");
+        _result.Text = "Читаю выбранные файлы. Программа работает — дождитесь окончания распознавания.";
+
+        try
         {
-            if (_files.Any(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase))) continue;
-            var kind = SmartReportDetector.Detect(path);
-            _files.Add(new FileItem(path, kind));
-            if (kind == SmartImportKind.Unknown) unknown.Add(System.IO.Path.GetFileName(path));
+            for (var i = 0; i < pending.Length; i++)
+            {
+                var path = pending[i];
+                var fileName = System.IO.Path.GetFileName(path);
+                _progressText.Text = $"Определяю формат {i + 1} из {pending.Length}: {fileName}";
+                var kind = await Task.Run(() => SmartReportDetector.Detect(path));
+                _files.Add(new FileItem(path, kind));
+                if (kind == SmartImportKind.Unknown) unknown.Add(fileName);
+                _progressBar.Value = (i + 1) * 100d / pending.Length;
+                RefreshGrid();
+            }
+
+            _result.Text = unknown.Count == 0
+                ? $"Готово к импорту: {_files.Count} файл(а/ов). Все форматы определены."
+                : "Не удалось определить тип: " + string.Join(", ", unknown) + ".";
+            _progressText.Text = unknown.Count == 0
+                ? "Распознавание файлов завершено."
+                : $"Распознавание завершено. Неизвестных файлов: {unknown.Count}.";
+            _progressBar.Value = 100;
         }
-        RefreshGrid();
-        _result.Text = unknown.Count == 0
-            ? $"Готово к импорту: {_files.Count} файл(а/ов). Все форматы определены."
-            : "Не удалось определить тип: " + string.Join(", ", unknown) + ".";
+        finally
+        {
+            Cursor = null;
+        }
     }
 
     private void RefreshGrid() { _grid.ItemsSource = null; _grid.ItemsSource = _files; UpdateButtons(); }
@@ -208,26 +255,50 @@ public sealed class SmartUnifiedImportWindow : Window
     private async void Import_Click(object sender, RoutedEventArgs e)
     {
         if (!_importButton.IsEnabled) return;
-        var files = _files.ToArray(); _importButton.IsEnabled = false; _result.Text = "Импортирую и проверяю файлы...";
+        var files = _files.ToArray();
+        _importButton.IsEnabled = false;
+        Cursor = Cursors.Wait;
+        ShowIndeterminateProgress("Начинаю импорт...");
+        _result.Text = "Импорт идёт. Полоса ниже двигается, пока программа читает и записывает данные. После успешного завершения это окно закроется автоматически.";
+
+        var stages = 2;
+        if (files.Any(x => x.Kind == SmartImportKind.Sber)) stages++;
+        if (files.Any(x => x.Kind == SmartImportKind.UbrdDaily)) stages++;
+        if (files.Any(x => x.Kind == SmartImportKind.ClosedShifts)) stages++;
+        if (files.Any(x => x.Kind == SmartImportKind.Taxcom)) stages++;
+        if (files.Any(x => x.Kind == SmartImportKind.TaxcomFiscalDocuments)) stages++;
+        if (files.Any(x => x.Kind == SmartImportKind.Crpt)) stages++;
+        stages += files.Where(x => x.Kind == SmartImportKind.Frontol)
+            .Select(x => (x.OrganizationId, x.LocationId)).Distinct().Count();
+
+        var progress = new Progress<string>(message => _progressText.Text = message);
         try
         {
             var text = await Task.Run(() =>
             {
                 var result = new List<string>();
+                var stage = 0;
+                void Report(string message)
+                {
+                    stage++;
+                    ((IProgress<string>)progress).Report($"Этап {stage} из {stages}: {message}");
+                }
 
                 var sber = files.Where(x => x.Kind == SmartImportKind.Sber).Select(x => x.Path).ToArray();
                 if (sber.Length > 0)
                 {
+                    Report($"Сбер — читаю {sber.Length} файл(а/ов)");
                     var summary = new SmartSberAcquiringImporter(_database).ImportFiles(sber);
                     result.Add("СБЕР — ВСЕ ФОРМАТЫ\n" + summary.ToDisplayText());
                 }
 
-                // Bank import creates the physical points first; now serial rules can bind the KKT without guessing.
+                Report("подготавливаю торговые точки и правила привязки касс");
                 SmartKnownRules.PrepareCleanDatabase(_database);
 
                 var ubrd = files.Where(x => x.Kind == SmartImportKind.UbrdDaily).Select(x => x.Path).ToArray();
                 if (ubrd.Length > 0)
                 {
+                    Report($"УБРиР — читаю {ubrd.Length} файл(а/ов)");
                     var summary = new UbrdDailyImporter(_database).ImportFiles(ubrd);
                     result.Add("УБРиР — СВОД ПО ДНЯМ\n" + summary.ToDisplayText());
                 }
@@ -235,6 +306,7 @@ public sealed class SmartUnifiedImportWindow : Window
                 var closed = files.Where(x => x.Kind == SmartImportKind.ClosedShifts).Select(x => x.Path).ToArray();
                 if (closed.Length > 0)
                 {
+                    Report($"Закрытые смены — читаю {closed.Length} файл(а/ов)");
                     var summary = new ClosedShiftReportImporter(_database).ImportFiles(closed);
                     result.Add("ЗАКРЫТЫЕ СМЕНЫ\n" + summary.ToDisplayText());
                 }
@@ -242,6 +314,7 @@ public sealed class SmartUnifiedImportWindow : Window
                 var taxcom = files.Where(x => x.Kind == SmartImportKind.Taxcom).Select(x => x.Path).ToArray();
                 if (taxcom.Length > 0)
                 {
+                    Report($"Такском — смены, {taxcom.Length} файл(а/ов)");
                     var summary = new TaxcomShiftReportImporter(_database, _fallbackOrganizationId).ImportFiles(taxcom);
                     result.Add("ТАКСКОМ — СМЕНЫ\n" + summary.ToDisplayText());
                 }
@@ -249,6 +322,7 @@ public sealed class SmartUnifiedImportWindow : Window
                 var fiscal = files.Where(x => x.Kind == SmartImportKind.TaxcomFiscalDocuments).Select(x => x.Path).ToArray();
                 if (fiscal.Length > 0)
                 {
+                    Report($"Такском — фискальные документы, {fiscal.Length} файл(а/ов)");
                     var summary = new TaxcomFiscalDocumentImporter(_database, _fallbackOrganizationId).ImportFiles(fiscal);
                     result.Add("ТАКСКОМ — ФИСКАЛЬНЫЕ ДОКУМЕНТЫ\n" + summary.ToDisplayText());
                 }
@@ -256,6 +330,7 @@ public sealed class SmartUnifiedImportWindow : Window
                 var crpt = files.Where(x => x.Kind == SmartImportKind.Crpt).Select(x => x.Path).ToArray();
                 if (crpt.Length > 0)
                 {
+                    Report($"CRPT — читаю {crpt.Length} файл(а/ов)");
                     var summary = new CrptArchiveImporter(_database).ImportFiles(crpt);
                     result.Add("CRPT\n" + summary.ToDisplayText());
                 }
@@ -263,22 +338,64 @@ public sealed class SmartUnifiedImportWindow : Window
                 foreach (var group in files.Where(x => x.Kind == SmartImportKind.Frontol)
                              .GroupBy(x => (OrganizationId: x.OrganizationId!.Value, LocationId: x.LocationId!.Value)))
                 {
+                    Report($"Frontol — {group.First().LocationName}");
                     var summary = new FrontolReportImporter(_database, group.Key.OrganizationId, group.Key.LocationId).ImportFiles(group.Select(x => x.Path));
                     result.Add($"FRONTOL — {group.First().LocationName}\n" + summary.ToDisplayText());
                 }
 
                 SmartKnownRules.PrepareCleanDatabase(_database);
+                Report("проверяю совпадения источников и завершаю импорт");
                 var matching = _database.RebuildCrossSourceShiftMatches();
                 result.Add($"ПРОВЕРКА ИСТОЧНИКОВ\nСовпавших Taxcom + Frontol: {matching.MatchedPairs}\nКонфликтов, требующих проверки: {matching.Conflicts}");
                 return string.Join("\n\n------------------------------\n\n", result);
             });
-            _result.Text = text; _afterImport();
+
+            _result.Text = text;
+            _progressBar.IsIndeterminate = false;
+            _progressBar.Value = 100;
+            _progressText.Text = "Готово. Импорт завершён успешно. Закрываю окно...";
+            _afterImport();
+            await Task.Delay(900);
+            DialogResult = true;
         }
         catch (Exception ex)
         {
+            _progressBar.IsIndeterminate = false;
+            _progressBar.Value = 0;
+            _progressText.Text = "Импорт остановлен из-за ошибки.";
             _result.Text = "Импорт не выполнен: " + ex.Message;
         }
-        finally { UpdateButtons(); }
+        finally
+        {
+            Cursor = null;
+            if (IsVisible) UpdateButtons();
+        }
+    }
+
+    private void ShowDeterminateProgress(double value, string message)
+    {
+        _progressBar.Visibility = Visibility.Visible;
+        _progressBar.IsIndeterminate = false;
+        _progressBar.Value = value;
+        _progressText.Visibility = Visibility.Visible;
+        _progressText.Text = message;
+    }
+
+    private void ShowIndeterminateProgress(string message)
+    {
+        _progressBar.Visibility = Visibility.Visible;
+        _progressBar.IsIndeterminate = true;
+        _progressText.Visibility = Visibility.Visible;
+        _progressText.Text = message;
+    }
+
+    private void HideProgress()
+    {
+        _progressBar.Visibility = Visibility.Collapsed;
+        _progressBar.IsIndeterminate = false;
+        _progressBar.Value = 0;
+        _progressText.Visibility = Visibility.Collapsed;
+        _progressText.Text = string.Empty;
     }
 
     private static string KindText(SmartImportKind kind) => kind switch
