@@ -131,8 +131,8 @@ public sealed class RegisterBindingRegressionTests
     public void PseudoPointRepair_IsIdempotent_AndSoftMergedPointDisappears()
     {
         using var f = new Fixture();
-        var target = new Location(Guid.NewGuid(), f.Org.Id, "Ладыженского 7", "Ладыженского 7");
-        var pseudo = new Location(Guid.NewGuid(), f.Org.Id, "Ладыженского, 7");
+        var target = new Location(Guid.NewGuid(), f.Org.Id, "Чапаева 28", "Чапаева 28");
+        var pseudo = new Location(Guid.NewGuid(), f.Org.Id, "Чапаева/МЧС");
         f.Db.Save(target); f.Db.Save(pseudo);
         f.Db.SaveRegisterBinding(new(Guid.NewGuid(), f.Org.Id, pseudo.Id, "991"));
         f.Shift("Taxcom.ShiftReport", "old", new DateTimeOffset(2026, 8, 31, 15, 0, 0, TimeSpan.FromHours(5)), 3457, pseudo.Id, "991");
