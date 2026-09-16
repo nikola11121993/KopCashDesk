@@ -28,9 +28,6 @@ public static class KnownBusinessRules
     public const string MusicCollegeRegisterSerial = "00178241";
     public const string MusicCollegePointName = "Музыкальный колледж";
 
-    // Any register which is not one of the confirmed KKT must stay unassigned until the user binds it manually.
-    private const string UnknownRegisterPoint = "__UNASSIGNED_UNKNOWN_KKT__";
-
     public static IReadOnlyList<string> FixedPointNames { get; } =
     [
         ReftinskayaPointName,
@@ -61,14 +58,12 @@ public static class KnownBusinessRules
             AtiMercuryRegisterSerial => AtiMercuryPointName,
             ChapaevaRegisterSerial => ChapaevaPointName,
             MusicCollegeRegisterSerial => MusicCollegePointName,
-            _ => UnknownRegisterPoint
+            _ => null
         };
     }
 
     public static Location? FindKnownPoint(IEnumerable<Location> locations, string knownPoint)
     {
-        if (knownPoint == UnknownRegisterPoint) return null;
-
         var list = locations.Where(x => x.IsActive).ToArray();
         var exact = list.Where(x => Normalize(x.Name) == Normalize(knownPoint)).ToArray();
         if (exact.Length == 1) return exact[0];
