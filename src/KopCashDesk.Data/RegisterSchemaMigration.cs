@@ -53,8 +53,8 @@ internal static class RegisterSchemaMigration
                     target_name TEXT NOT NULL, target_address TEXT NOT NULL DEFAULT '');
                 INSERT INTO register_location_rules VALUES
                     ('reftinskaya-serial','serial','00106900361561','Рефтинская ГРЭС 6 столовая',''),
-                    ('ati-mercury','display','Меркурий 180Ф','Столовая АТИ','Плеханова 64'),
-                    ('ati-appetit','display','Кулинария Аппетит','Столовая АТИ','Плеханова 64'),
+                    ('ati-mercury','serial','08050950','Столовая АТИ',''),
+                    ('ati-appetit','serial','00301000370264','ЗАВОД АТИ',''),
                     ('ladyzhenskogo','display','Ладыженского, 7','Ладыженского 7','Ладыженского 7'),
                     ('chapaeva','display','Чапаева/МЧС','Чапаева 28','Чапаева 28'),
                     ('college','display','Музыкальный колледж','Колледж искусств','Войкова 62');
