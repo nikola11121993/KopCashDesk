@@ -29,6 +29,10 @@ internal static class DatabaseMigrations
             MigrateToV3(db);
         if (version < 4)
             RegisterSchemaMigration.Apply(db);
+
+        // Data-only business rules are intentionally idempotent and remain outside the schema version.
+        // This lets an already-v4 database receive corrected hard KKT bindings without rebuilding tables.
+        KnownBusinessRules.ApplyPending(database);
     }
 
     private static void MigrateToV2(SqliteConnection db)
