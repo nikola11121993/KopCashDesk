@@ -28,26 +28,28 @@ public sealed class AtiKnownKktBindingTests
     }
 
     [Fact]
-    public void Kkt_08050950_MapsTo_StolovayaAti()
+    public void Kkt_08050950_MapsTo_Same_ZavodAti_Point()
     {
         using var f = new Fixture();
 
-        f.Import("Любое новое название", KnownBusinessRules.AtiMercuryRegisterSerial, "9287440300000002", 88646m, point: "ЗАВОД АТИ");
+        f.Import("Меркурий 180Ф", KnownBusinessRules.AtiMercuryRegisterSerial, "9287440300000002", 88646m, point: "Столовая АТИ");
 
         var binding = Assert.Single(f.Db.RegisterBindings());
-        Assert.Equal(f.StolovayaAti.Id, binding.LocationId);
+        Assert.Equal(f.ZavodAti.Id, binding.LocationId);
         Assert.Equal(BindingSource.Rule, binding.BindingSource);
         var day = Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026, 8));
-        Assert.Equal(f.StolovayaAti.Id, day.LocationId);
+        Assert.Equal(f.ZavodAti.Id, day.LocationId);
         Assert.Equal(88646m, day.FiscalElectronic);
     }
 
     [Fact]
-    public void KnownRule_DoesNotOverride_LockedManualBinding()
+    public void KnownRule_DoesNotOverride_LockedManualBinding_ToAnotherPhysicalPoint()
     {
         using var f = new Fixture();
+        var manualPoint = new Location(Guid.NewGuid(), f.Org.Id, "Ручная контрольная точка");
+        f.Db.Save(manualPoint);
         var manual = new RegisterBinding(
-            Guid.NewGuid(), f.Org.Id, f.StolovayaAti.Id, "9287440300000099",
+            Guid.NewGuid(), f.Org.Id, manualPoint.Id, "9287440300000099",
             BindingSource: BindingSource.Manual,
             IsLocked: true,
             KktSerial: KnownBusinessRules.AtiAppetitRegisterSerial,
@@ -59,12 +61,12 @@ public sealed class AtiKnownKktBindingTests
         var binding = Assert.Single(f.Db.RegisterBindings());
         Assert.Equal(BindingSource.Manual, binding.BindingSource);
         Assert.True(binding.IsLocked);
-        Assert.Equal(f.StolovayaAti.Id, binding.LocationId);
-        Assert.Equal(f.StolovayaAti.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId);
+        Assert.Equal(manualPoint.Id, binding.LocationId);
+        Assert.Equal(manualPoint.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId);
     }
 
     [Fact]
-    public void Reimport_DoesNotChange_KnownKktLocation()
+    public void Reimport_DoesNotSplit_AtiBackIntoTwoPoints()
     {
         using var f = new Fixture();
         const string fn = "9287440300000011";
@@ -81,7 +83,7 @@ public sealed class AtiKnownKktBindingTests
     }
 
     [Fact]
-    public void HistoricalFiscalData_IsMovedToCorrectLocation()
+    public void HistoricalFiscalData_IsMovedToSingleAtiPoint()
     {
         using var f = new Fixture();
         const string fn = "9287440300000021";
@@ -99,29 +101,26 @@ public sealed class AtiKnownKktBindingTests
     }
 
     [Fact]
-    public void KktReassignment_DoesNotMoveBankOperations()
+    public void AtiAliasMerge_MovesBankOperationsAndTerminalBindings_ToSamePoint()
     {
         using var f = new Fixture();
-        const string fn = "9287440300000031";
-        f.SeedWrongHistoricalFiscalData(KnownBusinessRules.AtiAppetitRegisterSerial, fn, 67517m);
         f.Db.Insert(new CashOperation(
             "Sber.Acquiring", "bank-ati", f.Org.Id, f.StolovayaAti.Id,
             new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.FromHours(5)),
-            SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 500m,
-            FiscalDriveNumber: fn,
-            KktSerial: KnownBusinessRules.AtiAppetitRegisterSerial));
-        var terminal = new TerminalBinding(Guid.NewGuid(), f.Org.Id, f.StolovayaAti.Id, "Sber", "ATI-TID");
-        f.Db.Save(terminal);
+            SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 500m));
+        f.Db.Save(new TerminalBinding(Guid.NewGuid(), f.Org.Id, f.StolovayaAti.Id, "Sber", "34723825"));
 
-        f.Db.Initialize();
+        KnownBusinessRules.ApplyPending(f.Db);
 
-        Assert.Equal(f.ZavodAti.Id, ReadOperationLocation(f.Db, "Taxcom.ShiftReport", "historic:electronic"));
-        Assert.Equal(f.StolovayaAti.Id, ReadOperationLocation(f.Db, "Sber.Acquiring", "bank-ati"));
-        Assert.Equal(f.StolovayaAti.Id, Assert.Single(f.Db.TerminalBindings()).LocationId);
+        Assert.Equal(f.ZavodAti.Id, ReadOperationLocation(f.Db, "Sber.Acquiring", "bank-ati"));
+        Assert.Equal(f.ZavodAti.Id, Assert.Single(f.Db.TerminalBindings()).LocationId);
+        var legacy = Assert.Single(f.Db.Locations(includeInactive: true), x => x.Id == f.StolovayaAti.Id);
+        Assert.False(legacy.IsActive);
+        Assert.Equal(f.ZavodAti.Id, legacy.MergedIntoLocationId);
     }
 
     [Fact]
-    public void Ati_August2026_TotalsRemain156163_AndSplitCorrectly()
+    public void Ati_August2026_TotalsAre156163_OnOnePhysicalPoint()
     {
         using var f = new Fixture();
 
@@ -129,9 +128,10 @@ public sealed class AtiKnownKktBindingTests
         f.Import("Меркурий 180Ф", KnownBusinessRules.AtiMercuryRegisterSerial, "9287440300000042", 88646m, shift: 2);
 
         var days = f.Db.PointDaySummaries(f.Org.Id, 2026, 8);
-        Assert.Equal(67517m, Assert.Single(days, x => x.LocationId == f.ZavodAti.Id).FiscalElectronic);
-        Assert.Equal(88646m, Assert.Single(days, x => x.LocationId == f.StolovayaAti.Id).FiscalElectronic);
-        Assert.Equal(156163m, days.Sum(x => x.FiscalElectronic ?? 0m));
+        var ati = Assert.Single(days);
+        Assert.Equal(f.ZavodAti.Id, ati.LocationId);
+        Assert.Equal(156163m, ati.FiscalElectronic);
+        Assert.Empty(f.Db.ShiftDetails(f.Org.Id, f.StolovayaAti.Id));
     }
 
     private static Guid? ReadOperationLocation(Database database, string source, string externalId)
