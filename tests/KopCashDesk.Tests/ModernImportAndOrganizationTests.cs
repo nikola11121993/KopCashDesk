@@ -6,6 +6,7 @@ using KopCashDesk.Data;
 using KopCashDesk.Desktop;
 using Microsoft.Data.Sqlite;
 using Xunit;
+using Location = KopCashDesk.Core.Location;
 
 namespace KopCashDesk.Tests;
 
@@ -57,7 +58,7 @@ public sealed class ModernImportAndOrganizationTests
 
         Assert.Equal(0, result.OperationsAdded);
         var cop = Assert.Single(f.Db.Organizations(), x => x.TaxId == KnownOrganizations.CenterTaxId);
-        Assert.Empty(f.Db.Locations().Where(x => x.OrganizationId == cop.Id));
+        Assert.DoesNotContain(f.Db.Locations(), x => x.OrganizationId == cop.Id);
     }
 
     [Fact]
