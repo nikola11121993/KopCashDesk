@@ -13,6 +13,7 @@
         <MenuItem Header="Организации" Click="Organizations_Click"/>
         <MenuItem Header="Торговые точки" Click="Locations_Click"/>
         <MenuItem Header="Терминалы" Click="Terminals_Click"/>
+        <MenuItem Header="ККТ / Кассы" Click="Registers_Click"/>
         <Separator/>
         <MenuItem Header="Объединить торговые точки..." Click="MergeLocations_Click"/>
       </MenuItem>
@@ -59,6 +60,7 @@
           <Button Content="Организации" Tag="organizations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Торговые точки" Tag="locations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Терминалы" Click="Terminals_Click" HorizontalContentAlignment="Left"/>
+          <Button Content="ККТ / Кассы" Click="Registers_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Объединить точки" Click="MergeLocations_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Свод по точкам" Click="Summary_Click" HorizontalContentAlignment="Left"/>
           <Button Content="Операции" Tag="operations" Click="Navigate_Click" HorizontalContentAlignment="Left"/>

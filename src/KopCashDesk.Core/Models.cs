@@ -16,13 +16,18 @@ public enum BindingSource { Automatic, Rule, Manual }
 public sealed record RegisterBinding(
     Guid Id,
     Guid OrganizationId,
-    Guid LocationId,
+    Guid? LocationId,
     string FiscalDriveNumber,
     string RegisterNumber = "",
     BindingSource BindingSource = BindingSource.Automatic,
     bool IsLocked = false,
     DateOnly? ValidFrom = null,
-    DateOnly? ValidTo = null);
+    DateOnly? ValidTo = null,
+    string KktSerial = "",
+    string DisplayName = "",
+    DateTimeOffset? CreatedAt = null,
+    DateTimeOffset? UpdatedAt = null,
+    bool IsActive = true);
 
 public sealed record TerminalBinding(
     Guid Id,
@@ -44,7 +49,9 @@ public enum PaymentKind { Cash, Electronic, Other, Unknown }
 public sealed record CashOperation(
     string Source, string ExternalId, Guid OrganizationId, Guid? LocationId,
     DateTimeOffset OccurredAt, SourceKind SourceKind, OperationKind Kind,
-    PaymentKind Payment, decimal Amount, string? SourceDocumentId = null);
+    PaymentKind Payment, decimal Amount, string? SourceDocumentId = null,
+    string FiscalDriveNumber = "", string KktSerial = "", string RegistrationNumber = "",
+    string RegisterDisplayName = "", int? ShiftNumber = null);
 
 public sealed record OperationView(
     DateTimeOffset OccurredAt,
@@ -59,14 +66,15 @@ public sealed record ShiftClosure(
     string Source,
     string ExternalId,
     Guid OrganizationId,
-    Guid LocationId,
+    Guid? LocationId,
     DateTimeOffset ClosedAt,
     decimal Total,
     decimal Cash,
     decimal Electronic,
     string FiscalDriveNumber = "",
     int? ShiftNumber = null,
-    string? SourceDocumentId = null);
+    string? SourceDocumentId = null,
+    string KktSerial = "", string RegistrationNumber = "", string RegisterDisplayName = "");
 
 public sealed record PointDaySummary(
     DateOnly Date,

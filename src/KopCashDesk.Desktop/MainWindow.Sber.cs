@@ -11,13 +11,14 @@ public partial class MainWindow
         {
             RefreshAll();
             StatusText.Text = "Архивы Сбер обработаны";
-        }) { Owner = this };
+        })
+        { Owner = this };
         window.ShowDialog();
     }
 
     private UIElement RenderOperations()
     {
-        var summary = RenderSummary();
+        var summary = RenderSummaryV051();
         PageTitle.Text = "Свод по точкам";
         PageSubtitle.Text = "Суммы по точкам, месяцам и дням; все операции остаются во второй вкладке";
 

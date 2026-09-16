@@ -9,6 +9,7 @@ public static class LocationMergeExtensions
     {
         if (sourceLocationId == targetLocationId) return false;
         database.EnsureManualCashPostings();
+        database.EnsureManualTerminalPostings();
 
         using var db = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -28,6 +29,24 @@ public static class LocationMergeExtensions
             throw new InvalidOperationException("Нельзя объединять точки разных организаций.");
 
         EnsureManualCashCanMerge(db, transaction, sourceLocationId, targetLocationId);
+        using (var check = db.CreateCommand())
+        {
+            check.Transaction = transaction;
+            check.CommandText = "SELECT COUNT(*) FROM manual_terminal_postings WHERE location_id=$loc";
+            check.Parameters.AddWithValue("$loc", sourceLocationId.ToString());
+            if (Convert.ToInt64(check.ExecuteScalar()) > 0) throw new InvalidOperationException("Сначала проверьте ручные суммы терминала исходной точки; автоматический перенос запрещён.");
+        }
+        using (var snapshot = db.CreateCommand())
+        {
+            snapshot.Transaction = transaction;
+            snapshot.CommandText = """
+                INSERT INTO register_binding_audit(binding_id,old_value,new_value,occurred_at)
+                SELECT id,json_object('LocationId',location_id,'FN',fn,'Source',binding_source),
+                       json_object('LocationId',$target,'FN',fn,'Source',binding_source),strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                FROM register_bindings WHERE location_id=$source AND is_active=1;
+                """;
+            snapshot.Parameters.AddWithValue("$target", targetLocationId.ToString()); snapshot.Parameters.AddWithValue("$source", sourceLocationId.ToString()); snapshot.ExecuteNonQuery();
+        }
 
         var operationCount = CountReferences(db, transaction, "operations", sourceLocationId);
         var shiftCount = CountReferences(db, transaction, "shift_closures", sourceLocationId);
@@ -80,6 +99,7 @@ public static class LocationMergeExtensions
         }
 
         transaction.Commit();
+        database.RebuildCrossSourceShiftMatches();
         return true;
     }
 
@@ -167,7 +187,7 @@ public static class LocationMergeExtensions
     {
         using var command = db.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = $"UPDATE {table} SET location_id=$target WHERE location_id=$source";
+        command.CommandText = $"UPDATE {table} SET location_id=$target WHERE location_id=$source" + (table == "register_bindings" ? " AND is_active=1" : "");
         command.Parameters.AddWithValue("$target", target.ToString());
         command.Parameters.AddWithValue("$source", source.ToString());
         command.ExecuteNonQuery();

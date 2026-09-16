@@ -10,8 +10,8 @@ public partial class MainWindow
     {
         VersionText.Text = AppVersion.Display;
         _db.EnsureManualCashPostings();
+        var applied = _db.RepairRegisterLocations() + KnownBusinessRules.ApplyPending(_db);
         var matching = _db.RebuildCrossSourceShiftMatches();
-        var applied = KnownBusinessRules.ApplyPending(_db);
         if (matching.NewMatches > 0 || matching.NewConflicts > 0 || applied > 0)
         {
             RefreshAll();
