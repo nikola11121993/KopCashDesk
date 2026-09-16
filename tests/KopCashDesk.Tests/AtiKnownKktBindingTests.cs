@@ -13,37 +13,44 @@ namespace KopCashDesk.Tests;
 public sealed class AtiKnownKktBindingTests
 {
     [Fact]
-    public void Kkt_00301000370264_MapsTo_ZavodAti()
+    public void Kkt_00301000370264_MapsTo_KulinariyaAppetit()
     {
         using var f = new Fixture();
-
-        f.Import("Название ККТ уже изменилось", KnownBusinessRules.AtiAppetitRegisterSerial, "9287440300000001", 67517m, point: "Столовая АТИ");
+        f.Import("Кулинария Аппетит", KnownBusinessRules.AtiAppetitRegisterSerial, "9287440300000001", 67517m);
 
         var binding = Assert.Single(f.Db.RegisterBindings());
-        Assert.Equal(f.ZavodAti.Id, binding.LocationId);
+        Assert.Equal(f.Appetit.Id, binding.LocationId);
         Assert.Equal(BindingSource.Rule, binding.BindingSource);
-        var day = Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026, 8));
-        Assert.Equal(f.ZavodAti.Id, day.LocationId);
-        Assert.Equal(67517m, day.FiscalElectronic);
+        Assert.Equal(67517m, Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026, 8)).FiscalElectronic);
     }
 
     [Fact]
-    public void Kkt_08050950_MapsTo_Same_ZavodAti_Point()
+    public void Kkt_08050950_MapsTo_StolovayaAti()
     {
         using var f = new Fixture();
-
-        f.Import("Меркурий 180Ф", KnownBusinessRules.AtiMercuryRegisterSerial, "9287440300000002", 88646m, point: "Столовая АТИ");
+        f.Import("Меркурий 180Ф", KnownBusinessRules.AtiMercuryRegisterSerial, "9287440300000002", 88646m);
 
         var binding = Assert.Single(f.Db.RegisterBindings());
-        Assert.Equal(f.ZavodAti.Id, binding.LocationId);
+        Assert.Equal(f.StolovayaAti.Id, binding.LocationId);
         Assert.Equal(BindingSource.Rule, binding.BindingSource);
-        var day = Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026, 8));
-        Assert.Equal(f.ZavodAti.Id, day.LocationId);
-        Assert.Equal(88646m, day.FiscalElectronic);
+        Assert.Equal(88646m, Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026, 8)).FiscalElectronic);
     }
 
     [Fact]
-    public void KnownRule_DoesNotOverride_LockedManualBinding_ToAnotherPhysicalPoint()
+    public void TwoAtiRegisters_RemainTwoPhysicalPoints()
+    {
+        using var f = new Fixture();
+        f.Import("Кулинария Аппетит", KnownBusinessRules.AtiAppetitRegisterSerial, "9287440300000041", 67517m, shift: 1);
+        f.Import("Меркурий 180Ф", KnownBusinessRules.AtiMercuryRegisterSerial, "9287440300000042", 88646m, shift: 2);
+
+        var days = f.Db.PointDaySummaries(f.Org.Id, 2026, 8);
+        Assert.Equal(67517m, Assert.Single(days, x => x.LocationId == f.Appetit.Id).FiscalElectronic);
+        Assert.Equal(88646m, Assert.Single(days, x => x.LocationId == f.StolovayaAti.Id).FiscalElectronic);
+        Assert.Equal(156163m, days.Sum(x => x.FiscalElectronic ?? 0m));
+    }
+
+    [Fact]
+    public void KnownRule_DoesNotOverride_LockedManualBinding()
     {
         using var f = new Fixture();
         var manualPoint = new Location(Guid.NewGuid(), f.Org.Id, "Ручная контрольная точка");
@@ -56,82 +63,29 @@ public sealed class AtiKnownKktBindingTests
             DisplayName: "Ручная привязка");
         f.Db.SaveRegisterBinding(manual);
 
-        f.Import("Кулинария Аппетит переименована", KnownBusinessRules.AtiAppetitRegisterSerial, manual.FiscalDriveNumber, 123m);
+        f.Import("Кулинария Аппетит", KnownBusinessRules.AtiAppetitRegisterSerial, manual.FiscalDriveNumber, 123m);
 
         var binding = Assert.Single(f.Db.RegisterBindings());
-        Assert.Equal(BindingSource.Manual, binding.BindingSource);
         Assert.True(binding.IsLocked);
+        Assert.Equal(BindingSource.Manual, binding.BindingSource);
         Assert.Equal(manualPoint.Id, binding.LocationId);
-        Assert.Equal(manualPoint.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId);
     }
 
     [Fact]
-    public void Reimport_DoesNotSplit_AtiBackIntoTwoPoints()
-    {
-        using var f = new Fixture();
-        const string fn = "9287440300000011";
-
-        f.Import("Кулинария Аппетит", KnownBusinessRules.AtiAppetitRegisterSerial, fn, 67517m, point: "Столовая АТИ");
-        f.Import("Совсем другое название ККТ", KnownBusinessRules.AtiAppetitRegisterSerial, fn, 67517m, point: "Столовая АТИ");
-
-        var binding = Assert.Single(f.Db.RegisterBindings());
-        Assert.Equal(f.ZavodAti.Id, binding.LocationId);
-        Assert.Equal(BindingSource.Rule, binding.BindingSource);
-        Assert.Single(f.Db.ShiftDetails(f.Org.Id, f.ZavodAti.Id));
-        Assert.Empty(f.Db.ShiftDetails(f.Org.Id, f.StolovayaAti.Id));
-        Assert.Equal(67517m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
-    }
-
-    [Fact]
-    public void HistoricalFiscalData_IsMovedToSingleAtiPoint()
+    public void HistoricalFiscalData_IsRepairedBySerial_WithoutMovingBankHistory()
     {
         using var f = new Fixture();
         const string fn = "9287440300000021";
         f.SeedWrongHistoricalFiscalData(KnownBusinessRules.AtiAppetitRegisterSerial, fn, 67517m);
-
-        f.Db.Initialize();
-
-        var binding = Assert.Single(f.Db.RegisterBindings());
-        Assert.Equal(f.ZavodAti.Id, binding.LocationId);
-        Assert.Equal(BindingSource.Rule, binding.BindingSource);
-        var day = Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026, 8));
-        Assert.Equal(f.ZavodAti.Id, day.LocationId);
-        Assert.Equal(67517m, day.FiscalElectronic);
-        Assert.Empty(f.Db.ShiftDetails(f.Org.Id, f.StolovayaAti.Id));
-    }
-
-    [Fact]
-    public void AtiAliasMerge_MovesBankOperationsAndTerminalBindings_ToSamePoint()
-    {
-        using var f = new Fixture();
         f.Db.Insert(new CashOperation(
             "Sber.Acquiring", "bank-ati", f.Org.Id, f.StolovayaAti.Id,
             new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.FromHours(5)),
             SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 500m));
-        f.Db.Save(new TerminalBinding(Guid.NewGuid(), f.Org.Id, f.StolovayaAti.Id, "Sber", "34723825"));
 
         KnownBusinessRules.ApplyPending(f.Db);
 
-        Assert.Equal(f.ZavodAti.Id, ReadOperationLocation(f.Db, "Sber.Acquiring", "bank-ati"));
-        Assert.Equal(f.ZavodAti.Id, Assert.Single(f.Db.TerminalBindings()).LocationId);
-        var legacy = Assert.Single(f.Db.Locations(includeInactive: true), x => x.Id == f.StolovayaAti.Id);
-        Assert.False(legacy.IsActive);
-        Assert.Equal(f.ZavodAti.Id, legacy.MergedIntoLocationId);
-    }
-
-    [Fact]
-    public void Ati_August2026_TotalsAre156163_OnOnePhysicalPoint()
-    {
-        using var f = new Fixture();
-
-        f.Import("Кулинария Аппетит", KnownBusinessRules.AtiAppetitRegisterSerial, "9287440300000041", 67517m, shift: 1);
-        f.Import("Меркурий 180Ф", KnownBusinessRules.AtiMercuryRegisterSerial, "9287440300000042", 88646m, shift: 2);
-
-        var days = f.Db.PointDaySummaries(f.Org.Id, 2026, 8);
-        var ati = Assert.Single(days);
-        Assert.Equal(f.ZavodAti.Id, ati.LocationId);
-        Assert.Equal(156163m, ati.FiscalElectronic);
-        Assert.Empty(f.Db.ShiftDetails(f.Org.Id, f.StolovayaAti.Id));
+        Assert.Equal(f.Appetit.Id, ReadOperationLocation(f.Db, "Taxcom.ShiftReport", "historic:electronic"));
+        Assert.Equal(f.StolovayaAti.Id, ReadOperationLocation(f.Db, "Sber.Acquiring", "bank-ati"));
     }
 
     private static Guid? ReadOperationLocation(Database database, string source, string externalId)
@@ -151,32 +105,26 @@ public sealed class AtiKnownKktBindingTests
         private readonly string _root = Path.Combine(Path.GetTempPath(), "ati-kkt-tests-" + Guid.NewGuid().ToString("N"));
         public Database Db { get; }
         public Organization Org { get; }
+        public Location Appetit { get; }
         public Location StolovayaAti { get; }
-        public Location ZavodAti { get; }
 
         public Fixture()
         {
             Directory.CreateDirectory(_root);
             Db = new Database(Path.Combine(_root, "cash.db"));
             Db.Initialize();
-            Org = new Organization(Guid.NewGuid(), "ООО КОП", "6683009222");
-            StolovayaAti = new Location(Guid.NewGuid(), Org.Id, KnownBusinessRules.AtiMercuryPointName, "Плеханова 64");
-            ZavodAti = new Location(Guid.NewGuid(), Org.Id, KnownBusinessRules.AtiAppetitPointName, "Завод АТИ");
+            Org = new Organization(Guid.NewGuid(), "ООО КОП", KnownBusinessRules.CopTaxId);
+            Appetit = new Location(Guid.NewGuid(), Org.Id, KnownBusinessRules.AtiAppetitPointName);
+            StolovayaAti = new Location(Guid.NewGuid(), Org.Id, KnownBusinessRules.AtiMercuryPointName);
             Db.Save(Org);
+            Db.Save(Appetit);
             Db.Save(StolovayaAti);
-            Db.Save(ZavodAti);
         }
 
-        public TaxcomShiftImportSummary Import(
-            string displayName,
-            string serial,
-            string fn,
-            decimal electronic,
-            int shift = 1,
-            string point = "Без торговой точки")
+        public TaxcomShiftImportSummary Import(string displayName, string serial, string fn, decimal electronic, int shift = 1)
         {
             var path = Path.Combine(_root, "ИНН 6683009222 Сводный отчет по сменам.xlsx");
-            CreateWorkbook(path, displayName, serial, fn, electronic, shift, point);
+            CreateWorkbook(path, displayName, serial, fn, electronic, shift);
             return new TaxcomShiftReportImporter(Db).ImportFiles([path]);
         }
 
@@ -212,14 +160,7 @@ public sealed class AtiKnownKktBindingTests
         }
     }
 
-    private static void CreateWorkbook(
-        string path,
-        string displayName,
-        string serial,
-        string fn,
-        decimal electronic,
-        int shift,
-        string point)
+    private static void CreateWorkbook(string path, string displayName, string serial, string fn, decimal electronic, int shift)
     {
         using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
         var workbookPart = document.AddWorkbookPart();
@@ -238,7 +179,7 @@ public sealed class AtiKnownKktBindingTests
             "31.08.2026 15:00:00", shift.ToString(), "0",
             electronic.ToString(System.Globalization.CultureInfo.InvariantCulture),
             electronic.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            point, displayName, serial, "0001234567890123", fn
+            "Без торговой точки", displayName, serial, "0001234567890123", fn
         ]));
         worksheetPart.Worksheet.Save();
 
