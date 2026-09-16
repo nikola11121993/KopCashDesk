@@ -11,6 +11,7 @@ public partial class MainWindow
     private void ModernMainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         KnownOrganizations.Ensure(_db);
+        KnownPointDirectory.Apply(_db);
         RefreshAll();
         Navigate("summary");
         PageSubtitle.Text = SummaryHint;
