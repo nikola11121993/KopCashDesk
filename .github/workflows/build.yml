@@ -35,7 +35,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: KopCashDesk-win-x64
-          path: artifacts/KopCashDesk-win-x64.zip
+          path: artifacts/KopCashDesk/*
           if-no-files-found: error
           retention-days: 1
       - name: Upload test results
@@ -52,7 +52,7 @@ jobs:
         shell: pwsh
         run: |
           if ('${{ steps.portable.outcome }}' -ne 'success') {
-            "### Actions artifact upload unavailable`nCompilation and tests have separate results. The ZIP could not be uploaded to Actions storage. A separate preview release is attempted only after a successful build." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "### Actions artifact upload unavailable`nCompilation and tests have separate results. The portable app could not be uploaded to Actions storage. A separate preview release is attempted only after a successful build." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
   preview:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

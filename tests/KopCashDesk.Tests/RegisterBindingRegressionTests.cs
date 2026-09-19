@@ -16,6 +16,8 @@ public sealed class RegisterBindingRegressionTests
     public void TwoKkt_3457Plus100_SummaryAndBreakdownAre3557()
     {
         using var f = new Fixture();
+        f.Bind("111", "991");
+        f.Bind("222", "992");
         f.Import("Меркурий 180Ф", "111", "991", 3457, 415, "31.08.2026 15:00:00", point: "Столовая АТИ");
         f.Import("Меркурий 180Ф", "111", "991", 0, 416, "31.08.2026 15:10:00", point: "Столовая АТИ");
         f.Import("Кулинария Аппетит", "222", "992", 100, 10, "31.08.2026 15:11:00", point: "Столовая АТИ");
@@ -26,6 +28,7 @@ public sealed class RegisterBindingRegressionTests
         Assert.Contains(rows, x => x.Register == "Меркурий 180Ф" && x.KktSerial == "111");
         Assert.Contains(rows, x => x.Register == "Кулинария Аппетит" && x.Electronic == 100);
     }
+
     [Fact]
     public void UnknownRegister_SavesRawShiftAndAmounts_WithoutInventingLocation()
     {
@@ -37,28 +40,35 @@ public sealed class RegisterBindingRegressionTests
         Assert.Equal(500m, Assert.Single(f.Db.ShiftDetails(f.Org.Id, null)).Electronic);
         Assert.Equal(2, f.Db.CountOperations());
     }
+
     [Fact]
-    public void RealPointFieldWinsOverUnknownDisplay_WithoutCreatingAnotherPoint()
+    public void UnknownRegister_DoesNotTrustIncomingPointName()
     {
-        using var f = new Fixture(); f.Import("Неизвестная модель", "111", "991", 100, point: "Столовая АТИ");
-        Assert.Equal(f.Point.Id, Assert.Single(f.Db.RegisterBindings()).LocationId); Assert.Single(f.Db.Locations());
+        using var f = new Fixture();
+        f.Import("Неизвестная модель", "111", "991", 100, point: "Столовая АТИ");
+        Assert.Null(Assert.Single(f.Db.RegisterBindings()).LocationId);
+        Assert.Single(f.Db.Locations());
+        Assert.Empty(f.Db.PointDaySummaries());
     }
+
     [Fact]
     public void ManualLocked_BeatsGresRule_InBindingAndImportedShift()
     {
-        using var f = new Fixture(); f.Db.Save(new Location(Guid.NewGuid(), f.Org.Id, "Рефтинская ГРЭС"));
+        using var f = new Fixture();
         f.Db.SaveRegisterBinding(new(Guid.NewGuid(), f.Org.Id, f.Point.Id, "991", BindingSource: BindingSource.Manual, IsLocked: true, KktSerial: KnownBusinessRules.ReftinskayaRegisterSerial));
         f.Import("Касса", KnownBusinessRules.ReftinskayaRegisterSerial, "991", 100);
         Assert.Equal(f.Point.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId);
         Assert.Equal(BindingSource.Manual, Assert.Single(f.Db.RegisterBindings()).BindingSource);
     }
+
     [Fact]
     public void SerialBinding_SurvivesFnReplacement()
     {
-        using var f = new Fixture(); f.Db.SaveRegisterBinding(new(Guid.NewGuid(), f.Org.Id, f.Point.Id, "991", KktSerial: "111"));
+        using var f = new Fixture(); f.Bind("111", "991");
         f.Import("Касса", "111", "992", 100);
         Assert.Equal(f.Point.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId);
     }
+
     [Fact]
     public void RnmBinding_ResolvesWhenFnAndSerialAreMissing()
     {
@@ -66,19 +76,21 @@ public sealed class RegisterBindingRegressionTests
         var b = RegisterBindingService.Resolve(f.Db, f.Org.Id, "", "", "12345", "Касса", "", new DateOnly(2026, 8, 31));
         Assert.Equal(f.Point.Id, b.LocationId);
     }
+
     [Fact]
     public void DatedMove_KeepsBeforeAtOldPoint_AndAfterAtNew_IncludingReimport()
     {
-        using var f = new Fixture(); var old = new Location(Guid.NewGuid(), f.Org.Id, "Ленинградская 1"); var next = new Location(Guid.NewGuid(), f.Org.Id, "Мира 4"); f.Db.Save(old); f.Db.Save(next);
+        using var f = new Fixture(); var old = new Location(Guid.NewGuid(), f.Org.Id, "Историческая точка 1"); var next = new Location(Guid.NewGuid(), f.Org.Id, "Историческая точка 2"); f.Db.Save(old); f.Db.Save(next);
         var b = new RegisterBinding(Guid.NewGuid(), f.Org.Id, old.Id, "991", KktSerial: "111"); f.Db.SaveRegisterBinding(b);
-        f.Import("Белокаменный кафе", "111", "991", 200, 1, "01.08.2026 15:00:00");
+        f.Import("Историческая ККТ", "111", "991", 200, 1, "01.08.2026 15:00:00");
         RegisterBindingService.Assign(f.Db, b, next.Id, new DateOnly(2026, 8, 15), null);
-        f.Import("Белокаменный кафе", "111", "991", 100, 2, "31.08.2026 15:00:00");
-        f.Import("Белокаменный кафе", "111", "991", 200, 1, "01.08.2026 15:00:00");
+        f.Import("Историческая ККТ", "111", "991", 100, 2, "31.08.2026 15:00:00");
+        f.Import("Историческая ККТ", "111", "991", 200, 1, "01.08.2026 15:00:00");
         var days = f.Db.PointDaySummaries();
         Assert.Equal(old.Id, Assert.Single(days, x => x.Date.Day == 1).LocationId); Assert.Equal(next.Id, Assert.Single(days, x => x.Date.Day == 31).LocationId);
         Assert.Equal(2, f.Db.RegisterBindings().Count); Assert.Equal(3, RegisterBindingService.Read(f.Db, true).Count);
     }
+
     [Fact]
     public void GapInHistory_DoesNotUseTodaysRule()
     {
@@ -86,39 +98,48 @@ public sealed class RegisterBindingRegressionTests
         f.Import("Меркурий 180Ф", "111", "991", 100);
         Assert.Empty(f.Db.PointDaySummaries()); Assert.Single(f.Db.ShiftDetails(f.Org.Id, null));
     }
+
     [Fact]
     public void RepeatedImport_DoesNotMultiplyRegistersLocationsShiftsOrLinks()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ"); f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ");
+        using var f = new Fixture(); f.Bind("111", "991");
+        f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ"); f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ");
         Assert.Single(f.Db.RegisterBindings()); Assert.Single(f.Db.Locations()); Assert.Single(f.Db.ShiftDetails(f.Org.Id, f.Point.Id)); Assert.Empty(f.Db.CrossSourceShiftLinks());
     }
+
     [Fact]
     public void IndependentFrontolAndTaxcom_ShiftSourcesBothContributeToFifo()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 3457, point: "Столовая АТИ");
+        using var f = new Fixture(); f.Bind("111", "991");
+        f.Import("Меркурий 180Ф", "111", "991", 3457, point: "Столовая АТИ");
         f.Shift("Frontol.Report", "frontol", new DateTimeOffset(2026, 8, 31, 18, 0, 0, TimeSpan.FromHours(5)), 100);
         f.Db.Insert(new("UBRiR", "historic", f.Org.Id, f.Point.Id, new DateTimeOffset(2026, 8, 31, 10, 0, 0, TimeSpan.FromHours(5)), SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 3557));
         Assert.Equal(3557m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
         var fifo = Assert.Single(f.Db.ReconciliationDays()); Assert.Equal(3557m, fifo.CashElectronic); Assert.Equal(0m, fifo.DayRemaining);
     }
+
     [Fact]
     public void SourceConflict_DoesNotProduceCashOrFifoAllocations()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 75952, 1, "09.06.2026 15:00:00", point: "Столовая АТИ");
+        using var f = new Fixture(); f.Bind("111", "991");
+        f.Import("Меркурий 180Ф", "111", "991", 75952, 1, "09.06.2026 15:00:00", point: "Столовая АТИ");
         f.Shift("Frontol.Report", "frontol", new DateTimeOffset(2026, 6, 9, 15, 1, 0, TimeSpan.FromHours(5)), 96101);
         var day = Assert.Single(f.Db.PointDaySummaries()); Assert.True(day.HasSourceConflict); Assert.Null(day.FiscalElectronic);
         Assert.Equal(2, f.Db.ShiftDetails(f.Org.Id, f.Point.Id).Count); Assert.Empty(f.Db.ReconciliationAllocations(f.Org.Id, f.Point.Id));
     }
+
     [Fact]
     public void ExactCrossSourceDuplicate_CountsOnceInDayMonthYearAndFifo()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 59460, 1, "10.06.2026 15:00:00", point: "Столовая АТИ");
+        using var f = new Fixture(); f.Bind("111", "991");
+        f.Import("Меркурий 180Ф", "111", "991", 59460, 1, "10.06.2026 15:00:00", point: "Столовая АТИ");
         f.Shift("Frontol.Report", "frontol", new DateTimeOffset(2026, 6, 10, 15, 1, 0, TimeSpan.FromHours(5)), 59460);
         Assert.Equal(59460m, Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026)).FiscalElectronic);
         Assert.Equal(59460m, Assert.Single(f.Db.PointDaySummaries(f.Org.Id, 2026, 6)).FiscalElectronic);
         Assert.Single(f.Db.CrossSourceShiftLinks()); Assert.Equal(2, f.Db.ShiftDetails(f.Org.Id, f.Point.Id).Count);
         Assert.Equal(59460m, Assert.Single(f.Db.ReconciliationDays()).CashElectronic);
     }
+
     [Fact]
     public void Assignment_IsAudited_AndUnassignedOldObservationsBecomeVisible()
     {
@@ -127,34 +148,49 @@ public sealed class RegisterBindingRegressionTests
         Assert.Equal(100m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
         Assert.Contains(f.Db.AuditEntries(), x => x.Action == "register.rebind" && x.Details.Contains("source=Manual") && x.Details.Contains("new_loc=" + f.Point.Id));
     }
+
     [Fact]
-    public void PseudoPointRepair_IsIdempotent_AndSoftMergedPointDisappears()
+    public void DisplayOnlyPseudoPoint_IsNotAutoMerged()
     {
         using var f = new Fixture();
-        var target = new Location(Guid.NewGuid(), f.Org.Id, "Чапаева 28", "Чапаева 28");
         var pseudo = new Location(Guid.NewGuid(), f.Org.Id, "Чапаева/МЧС");
-        f.Db.Save(target); f.Db.Save(pseudo);
+        f.Db.Save(pseudo);
         f.Db.SaveRegisterBinding(new(Guid.NewGuid(), f.Org.Id, pseudo.Id, "991"));
-        f.Shift("Taxcom.ShiftReport", "old", new DateTimeOffset(2026, 8, 31, 15, 0, 0, TimeSpan.FromHours(5)), 3457, pseudo.Id, "991");
-        Assert.Equal(1, f.Db.RepairRegisterLocations()); Assert.Equal(0, f.Db.RepairRegisterLocations());
-        Assert.False(Assert.Single(f.Db.Locations(true), x => x.Id == pseudo.Id).IsActive);
-        Assert.Equal(target.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId); Assert.Equal(2, f.Db.CountOperations());
+        Assert.Equal(0, f.Db.RepairRegisterLocations());
+        Assert.True(Assert.Single(f.Db.Locations(true), x => x.Id == pseudo.Id).IsActive);
     }
+
     [Fact]
-    public void HistoricBelokamennyLeningradskayaAndUbrir_AreNotMergedOrDropped()
+    public void HistoricVoroniyLeningradskayaMira_AreMergedIntoClosedReportingPoint()
     {
-        using var f = new Fixture(); var old = new Location(Guid.NewGuid(), f.Org.Id, "Белокаменный кафе"); var mid = new Location(Guid.NewGuid(), f.Org.Id, "Ленинградская 1"); var next = new Location(Guid.NewGuid(), f.Org.Id, "Мира 4"); f.Db.Save(old); f.Db.Save(mid); f.Db.Save(next);
+        using var f = new Fixture();
+        var old = new Location(Guid.NewGuid(), f.Org.Id, "Вороний Брод");
+        var mid = new Location(Guid.NewGuid(), f.Org.Id, "Ленинградская 1");
+        var next = new Location(Guid.NewGuid(), f.Org.Id, "Мира 4");
+        f.Db.Save(old); f.Db.Save(mid); f.Db.Save(next);
         f.Db.Insert(new("UBRiR", "old-terminal", f.Org.Id, old.Id, new DateTimeOffset(2026, 1, 2, 12, 0, 0, TimeSpan.FromHours(5)), SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 100));
-        KnownBusinessRules.ApplyPending(f.Db); f.Db.RepairRegisterLocations();
-        Assert.Equal(4, f.Db.Locations().Count); var day = Assert.Single(f.Db.PointDaySummaries()); Assert.Equal(old.Id, day.LocationId); Assert.Equal(100m, day.BankElectronic);
+
+        KnownBusinessRules.ApplyPending(f.Db);
+
+        var active = f.Db.Locations().Where(x => x.OrganizationId == f.Org.Id).ToArray();
+        Assert.Equal(7, active.Length);
+        var mira = Assert.Single(active, x => x.Name == KnownBusinessRules.MiraPointName);
+        var day = Assert.Single(f.Db.PointDaySummaries());
+        Assert.Equal(mira.Id, day.LocationId);
+        Assert.Equal(100m, day.BankElectronic);
+        var all = f.Db.Locations(true).Where(x => x.OrganizationId == f.Org.Id).ToArray();
+        Assert.All(all.Where(x => x.Id == old.Id || x.Id == mid.Id || x.Id == next.Id), x => Assert.False(x.IsActive));
     }
+
     [Fact]
     public void MigrationReentry_PreservesAmountsBindingsAndSourceRows()
     {
-        using var f = new Fixture(); f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ");
+        using var f = new Fixture(); f.Bind("111", "991");
+        f.Import("Меркурий 180Ф", "111", "991", 100, point: "Столовая АТИ");
         var count = f.Db.CountOperations(); var binding = Assert.Single(f.Db.RegisterBindings()); f.Db.Initialize(); f.Db.Initialize();
-        Assert.Equal(count, f.Db.CountOperations()); Assert.Equal(binding, Assert.Single(f.Db.RegisterBindings())); Assert.Equal(100m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
+        Assert.Equal(count, f.Db.CountOperations()); Assert.Equal(binding.Id, Assert.Single(f.Db.RegisterBindings()).Id); Assert.Equal(100m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
     }
+
     [Fact]
     public void UnknownRegister_AcrossDaysKeepsOnePendingBinding()
     {
@@ -165,18 +201,17 @@ public sealed class RegisterBindingRegressionTests
         Assert.Equal(2, f.Db.ShiftDetails(f.Org.Id, null).Count);
         Assert.Empty(f.Db.PointDaySummaries());
     }
+
     [Fact]
-    public void AutomaticRepair_DoesNotMoveLockedRegisterPoint()
+    public void HardRule_DoesNotMoveLockedRegisterPoint()
     {
         using var f = new Fixture();
-        var source = new Location(Guid.NewGuid(), f.Org.Id, KnownBusinessRules.ReftinskayaRegisterSerial);
-        f.Db.Save(source);
-        f.Db.Save(new Location(Guid.NewGuid(), f.Org.Id, KnownBusinessRules.ReftinskayaPointName));
-        f.Db.SaveRegisterBinding(new(Guid.NewGuid(), f.Org.Id, source.Id, "991", BindingSource: BindingSource.Manual, IsLocked: true, KktSerial: KnownBusinessRules.ReftinskayaRegisterSerial));
-        Assert.Equal(0, KnownBusinessRules.ApplyPending(f.Db));
-        Assert.Equal(source.Id, Assert.Single(f.Db.RegisterBindings()).LocationId);
-        Assert.Contains(f.Db.Locations(), x => x.Id == source.Id);
+        f.Db.SaveRegisterBinding(new(Guid.NewGuid(), f.Org.Id, f.Point.Id, "991", BindingSource: BindingSource.Manual, IsLocked: true, KktSerial: KnownBusinessRules.ReftinskayaRegisterSerial));
+        KnownBusinessRules.ApplyPending(f.Db);
+        Assert.Equal(f.Point.Id, Assert.Single(f.Db.RegisterBindings()).LocationId);
+        Assert.Equal(BindingSource.Manual, Assert.Single(f.Db.RegisterBindings()).BindingSource);
     }
+
     [Fact]
     public void DifferentKnownSerials_AreNotCrossSourceDuplicates()
     {
@@ -188,13 +223,25 @@ public sealed class RegisterBindingRegressionTests
         Assert.Empty(f.Db.CrossSourceShiftLinks());
         Assert.Equal(2, Assert.Single(f.Db.PointDaySummaries()).ShiftCount);
     }
+
     private sealed class Fixture : IDisposable
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "kkt-tests-" + Guid.NewGuid().ToString("N"));
         public Database Db { get; }
         public Organization Org { get; }
         public Location Point { get; }
-        public Fixture() { Directory.CreateDirectory(root); Db = new(Path.Combine(root, "cash.db")); Db.Initialize(); Org = new(Guid.NewGuid(), "Тест", "6683009222"); Point = new(Guid.NewGuid(), Org.Id, "Столовая АТИ", "Плеханова 64"); Db.Save(Org); Db.Save(Point); }
+        public Fixture()
+        {
+            Directory.CreateDirectory(root);
+            Db = new(Path.Combine(root, "cash.db"));
+            Db.Initialize();
+            Org = new(Guid.NewGuid(), "Тест", KnownBusinessRules.CopTaxId);
+            Point = new(Guid.NewGuid(), Org.Id, KnownBusinessRules.AtiMercuryPointName, "Плеханова 64");
+            Db.Save(Org); Db.Save(Point);
+        }
+        public void Bind(string serial, string fn) =>
+            Db.SaveRegisterBinding(new RegisterBinding(Guid.NewGuid(), Org.Id, Point.Id, fn, KktSerial: serial));
+
         public TaxcomShiftImportSummary Import(string name, string serial, string fn, decimal amount, int shift = 1, string closed = "31.08.2026 15:00:00", string point = "Без торговой точки")
         {
             var path = Path.Combine(root, "ИНН 6683009222 report.xlsx");

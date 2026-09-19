@@ -6,14 +6,18 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>KopCashDesk</AssemblyName>
     <RootNamespace>KopCashDesk.Desktop</RootNamespace>
-    <ApplicationTitle>КОП Кассы</ApplicationTitle>
+    <ApplicationTitle>Контроль выручки</ApplicationTitle>
     <ApplicationIcon>Assets\KopCashDesk.ico</ApplicationIcon>
-    <Version>0.5.7</Version>
+    <Version>0.5.13</Version>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets\KopCashDesk.ico" />
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.3.0" />
     <ProjectReference Include="..\KopCashDesk.Core\KopCashDesk.Core.csproj" />
     <ProjectReference Include="..\KopCashDesk.Data\KopCashDesk.Data.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="MainWindow.Registers.cs" />
+    <Compile Remove="SmartSberAcquiringImporter.cs" />
   </ItemGroup>
 </Project>
