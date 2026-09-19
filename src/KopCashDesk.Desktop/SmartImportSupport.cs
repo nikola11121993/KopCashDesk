@@ -1,3 +1,4 @@
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using KopCashDesk.Core;
@@ -70,18 +71,28 @@ public static class SmartReportDetector
         using var document = SpreadsheetDocument.Open(stream, false);
         var workbookPart = document.WorkbookPart;
         if (workbookPart?.Workbook.Sheets is null) return SmartImportKind.Unknown;
+
+        // Shared strings are only a few MB even when the worksheet XML itself is tens of MB.
+        // The important optimisation is to stream worksheet rows instead of materialising the
+        // entire SheetData DOM just to identify the report type.
         var shared = workbookPart.SharedStringTablePart?.SharedStringTable
             .Elements<SharedStringItem>().Select(x => x.InnerText).ToArray() ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var name = Normalize(fileName);
 
         foreach (var sheet in workbookPart.Workbook.Sheets.Elements<Sheet>().Take(20))
         {
             var id = sheet.Id?.Value;
             if (string.IsNullOrWhiteSpace(id) || workbookPart.GetPartById(id) is not WorksheetPart ws) continue;
-            var data = ws.Worksheet.GetFirstChild<SheetData>();
-            if (data is null) continue;
-            foreach (var row in data.Elements<Row>().Take(120))
+
+            var rowsSeen = 0;
+            using var reader = OpenXmlReader.Create(ws);
+            while (reader.Read() && rowsSeen < 120)
             {
+                if (!reader.IsStartElement || reader.ElementType != typeof(Row)) continue;
+                if (reader.LoadCurrentElement() is not Row row) continue;
+                rowsSeen++;
+
                 var rowValues = new List<string>();
                 foreach (var cell in row.Elements<Cell>())
                 {
@@ -90,11 +101,21 @@ public static class SmartReportDetector
                     seen.Add(value);
                     rowValues.Add(value);
                 }
-                if (SmartSberAcquiringImporter.IsBankHeader(rowValues)) return SmartImportKind.Sber;
+
+                if (SmartSberAcquiringImporter.IsBankHeader(rowValues))
+                    return SmartImportKind.Sber;
+
+                var classified = ClassifySeen(seen, name);
+                if (classified != SmartImportKind.Unknown)
+                    return classified;
             }
         }
 
-        var name = Normalize(fileName);
+        return ClassifySeen(seen, name);
+    }
+
+    private static SmartImportKind ClassifySeen(HashSet<string> seen, string normalizedFileName)
+    {
         if (Has(seen, "торговая точка", "номер смены", "дата закрытия смены", "получено наличными", "получено безналичными", "номер фн") &&
             (seen.Contains("наименование ккт") || seen.Contains("заводской номер ккт")))
             return SmartImportKind.ClosedShifts;
@@ -106,14 +127,16 @@ public static class SmartReportDetector
         var fiscalIds = new[] { "№ фд", "фпд", "название ккт", "зав. № ккт", "рег. № ккт", "зав. № фн" };
         if (fiscalCore.All(seen.Contains) &&
             (seen.Contains("сводный отчет по фискальным документам") ||
-             name.Contains("сводный отчет по фискальным документам", StringComparison.Ordinal) ||
+             normalizedFileName.Contains("сводный отчет по фискальным документам", StringComparison.Ordinal) ||
              fiscalIds.Count(seen.Contains) >= 3))
             return SmartImportKind.TaxcomFiscalDocuments;
 
         var shiftCore = new[] { "дата закрытия", "№ смены", "выручка нал.", "выручка безнал." };
         var shiftIds = new[] { "название ккт", "зав. № фн", "рег. № ккт", "зав. № ккт" };
         if (shiftCore.All(seen.Contains) &&
-            (seen.Contains("сводный отчет по сменам") || name.Contains("сводный отчет по сменам", StringComparison.Ordinal) || shiftIds.Any(seen.Contains)))
+            (seen.Contains("сводный отчет по сменам") ||
+             normalizedFileName.Contains("сводный отчет по сменам", StringComparison.Ordinal) ||
+             shiftIds.Any(seen.Contains)))
             return SmartImportKind.Taxcom;
 
         return SmartImportKind.Unknown;
