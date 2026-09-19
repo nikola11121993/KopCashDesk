@@ -289,7 +289,7 @@ public sealed class TaxcomFiscalDocumentImporter
         var externalId = BuildDocumentExternalId(
             organization.TaxId, fn, registerNumber, serial, fd, fpd, shift, numberInShift, occurredAt, total);
         var kind = DocumentKind(documentType, operationText);
-        var shiftNumber = int.TryParse(shift, out var parsedShift) ? parsedShift : null;
+        int? shiftNumber = int.TryParse(shift, out var parsedShift) ? parsedShift : null;
 
         if (cash != 0m)
             QueueFiscalPart(externalId + ":cash", organization, register, occurredAt, kind, PaymentKind.Cash, cash, documentId, shiftNumber, summary);
