@@ -82,6 +82,109 @@ public sealed class TaxcomFiscalDocumentImportTests
         }
     }
 
+    [Fact]
+    public void GarantFiscalReport_AutoCreatesPoints_AndBindsKkt()
+    {
+        var folder = NewFolder();
+        var report = Path.Combine(folder, "ИНН 6683011158 КПП 668301001 Сводный отчет по фискальным документам.xlsx");
+        var databasePath = Path.Combine(folder, "cashdesk.db");
+
+        try
+        {
+            CreateWorkbookWithRows(report,
+                CustomDocumentRow("19.09.2026 12:00:00", "Кафе \"UP ET IT\", ДВВС", "ДВВС Касса 1", "00108722823598", "0009046158049705", "7384441001761900", "100"),
+                CustomDocumentRow("19.09.2026 12:05:00", "ДИВС", "ДИВС Кафе", "00307405839808", "0007124789060567", "7381440800322661", "200"),
+                CustomDocumentRow("19.09.2026 12:10:00", "Без торговой точки", "Запасная ДВВС", "00308302622940", "0009075914046300", "7380440801563017", "300"));
+
+            var database = new Database(databasePath);
+            database.Initialize();
+            KnownOrganizations.Ensure(database);
+
+            var result = new TaxcomFiscalDocumentImporter(database).ImportFiles([report]);
+            var garant = Assert.Single(database.Organizations(), x => x.TaxId == KnownOrganizations.GarantTaxId);
+            var points = database.Locations().Where(x => x.OrganizationId == garant.Id).Select(x => x.Name).OrderBy(x => x).ToArray();
+
+            Assert.Equal(3, result.LocationsCreated);
+            Assert.Equal(3, result.DocumentsProcessed);
+            Assert.Equal(3, result.FiscalOperationsInserted);
+            Assert.Contains("Кафе \"UP ET IT\", ДВВС", points);
+            Assert.Contains("ДИВС", points);
+            Assert.Contains("Запасная ДВВС", points);
+            Assert.DoesNotContain("Без торговой точки", points);
+
+            var bindings = database.RegisterBindings().Where(x => x.OrganizationId == garant.Id).ToArray();
+            Assert.Equal(3, bindings.Length);
+            Assert.All(bindings, x => Assert.NotNull(x.LocationId));
+        }
+        finally
+        {
+            TryDelete(folder);
+        }
+    }
+
+    private static void CreateWorkbookWithRows(string path, params string[][] rows)
+    {
+        using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
+        var workbookPart = document.AddWorkbookPart();
+        workbookPart.Workbook = new Workbook();
+        var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+        var data = new SheetData();
+        worksheetPart.Worksheet = new Worksheet(data);
+
+        data.Append(TextRow(1, ["Такском-Касса"]));
+        data.Append(TextRow(2, ["Сводный отчет по фискальным документам"]));
+        data.Append(TextRow(3, ["Дата формирования", "19.09.2026 18:34"]));
+        data.Append(TextRow(4, ["Период", "с 01.01.2026 00:00 по 19.09.2026 23:59"]));
+        data.Append(TextRow(5, ["Торговая точка", "несколько точек"]));
+        data.Append(TextRow(6, ["ККТ", "несколько ККТ"]));
+        data.Append(TextRow(10, ["По указанным критериям поиска найдено слишком много документов. Отчет сформирован только на основании 30000 последних полученных документов."]));
+        data.Append(TextRow(11, Headers));
+
+        uint rowIndex = 12;
+        foreach (var values in rows)
+            data.Append(TextRow(rowIndex++, values));
+        data.Append(TextRow(rowIndex, ["Итог"]));
+
+        worksheetPart.Worksheet.Save();
+        var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+        sheets.Append(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(worksheetPart),
+            SheetId = 1,
+            Name = "Фискальные документы"
+        });
+        workbookPart.Workbook.Save();
+    }
+
+    private static string[] CustomDocumentRow(
+        string date,
+        string point,
+        string kktName,
+        string serial,
+        string rnm,
+        string fn,
+        string electronic)
+    {
+        var values = Enumerable.Repeat(string.Empty, Headers.Length).ToArray();
+        void Set(string header, string value) => values[Array.IndexOf(Headers, header)] = value;
+        Set("Дата и время", date);
+        Set("Документ", "Кассовый чек");
+        Set("№ смены", "1");
+        Set("№ за смену", "1");
+        Set("Тип операции", "Приход");
+        Set("Наличными", "0");
+        Set("Безналичными", electronic);
+        Set("Сумма", electronic);
+        Set("№ ФД", Guid.NewGuid().GetHashCode().ToString("0"));
+        Set("ФПД", "123456789");
+        Set("Торговая точка", point);
+        Set("Название ККТ", kktName);
+        Set("Зав. № ККТ", serial);
+        Set("Рег. № ККТ", rnm);
+        Set("Зав. № ФН", fn);
+        return values;
+    }
+
     private static void CreateWorkbook(string path, bool includeDocuments)
     {
         using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
