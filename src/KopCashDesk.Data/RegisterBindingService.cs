@@ -139,6 +139,15 @@ public static class RegisterBindingService
         {
             var matches = locations.Where(l => Normalize(l.Name) == Normalize(point) || (l.Address.Length > 0 && Normalize(l.Address) == Normalize(point))).ToArray();
             if (matches.Length == 1) location = matches[0];
+            else if (matches.Length == 0 && !fixedSevenPolicy)
+            {
+                // For organizations other than ООО ЦОП, a real point name from the fiscal report
+                // is authoritative enough to create the point automatically. The old seven-point
+                // restriction was never meant to cap all organizations together.
+                var cleanName = string.Join(' ', point.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                location = new Location(Guid.NewGuid(), org, cleanName);
+                database.Save(location);
+            }
         }
         var b = new RegisterBinding(Guid.NewGuid(), org, location?.Id, fn, rnm, ruleLocation is null ? BindingSource.Automatic : BindingSource.Rule,
             false, null, null, serial, display);
