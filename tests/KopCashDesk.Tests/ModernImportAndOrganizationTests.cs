@@ -62,6 +62,37 @@ public sealed class ModernImportAndOrganizationTests
     }
 
     [Fact]
+    public void KopHrizotil_37446495_IsRoutedToSiestaForFiscalReconciliation()
+    {
+        using var f = new Fixture();
+        var hrizotilReport = Path.Combine(f.Root, "hrizotil-main.xlsx");
+        var siestaFiscalReport = Path.Combine(f.Root, "hrizotil-second-terminal.xlsx");
+
+        CreateSberWorkbook(hrizotilReport,
+            "ООО КОП", "6603017238", "Хризотил", "г. Асбест, ул. Королева, 30",
+            "37446500", "700000000001", "19.09.2026 12:00:00", "7000");
+        CreateSberWorkbook(siestaFiscalReport,
+            "ООО КОП", "6603017238", "Хризотил", "г. Асбест, ул. Королева, 30",
+            "37446495", "500000000001", "19.09.2026 12:05:00", "500");
+
+        var result = new SmartSberAcquiringImporter(f.Db).ImportFiles([hrizotilReport, siestaFiscalReport]);
+
+        Assert.Equal(2, result.OperationsAdded);
+        var kop = Assert.Single(f.Db.Organizations(), x => x.TaxId == KnownOrganizations.KopTaxId);
+        var locations = f.Db.Locations().Where(x => x.OrganizationId == kop.Id).ToArray();
+        var hrizotil = Assert.Single(locations, x => x.Name == "Хризотил");
+        var siesta = Assert.Single(locations, x => x.Name == "Кафе Сиеста");
+
+        var day = f.Db.PointDaySummaries(kop.Id, 2026, 9).Where(x => x.Date == new DateOnly(2026, 9, 19)).ToArray();
+        Assert.Equal(7000m, Assert.Single(day, x => x.LocationId == hrizotil.Id).BankElectronic);
+        Assert.Equal(500m, Assert.Single(day, x => x.LocationId == siesta.Id).BankElectronic);
+
+        var bindings = f.Db.TerminalBindings().Where(x => x.OrganizationId == kop.Id).ToArray();
+        Assert.Equal(hrizotil.Id, Assert.Single(bindings, x => x.TerminalId == "37446500").LocationId);
+        Assert.Equal(siesta.Id, Assert.Single(bindings, x => x.TerminalId == "37446495").LocationId);
+    }
+
+    [Fact]
     public void BatchInsert_DeduplicatesWithinOneTransaction()
     {
         using var f = new Fixture();
