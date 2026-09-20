@@ -89,16 +89,13 @@ public static class CrossSourceShiftExtensions
                 var canonical = ordered[0];
                 foreach (var observation in ordered.Skip(1))
                 {
-                    if (MoneyEqual(canonical, observation))
-                    {
-                        desiredMatches.Add(new(canonical, observation, DeltaSeconds(canonical.ClosedAt, observation.ClosedAt)));
-                        duplicateTaxcom.Add(observation.Id);
-                    }
-                    else
-                    {
-                        desiredConflicts.Add(new(canonical, observation, DeltaSeconds(canonical.ClosedAt, observation.ClosedAt)));
-                        duplicateTaxcom.Add(canonical.Id); duplicateTaxcom.Add(observation.Id);
-                    }
+                    // Overlapping Taxcom exports can contain the same FN/shift with a slightly
+                    // different close timestamp or a later corrected amount. Taxcom is the
+                    // authoritative OFD source, so keep the newest Taxcom observation as the
+                    // canonical one and collapse older copies instead of reporting them as a
+                    // Taxcom ↔ Frontol mismatch.
+                    desiredMatches.Add(new(canonical, observation, DeltaSeconds(canonical.ClosedAt, observation.ClosedAt)));
+                    duplicateTaxcom.Add(observation.Id);
                 }
             }
             var taxcom = taxcomRows.Where(x => !duplicateTaxcom.Contains(x.Id)).ToArray();
