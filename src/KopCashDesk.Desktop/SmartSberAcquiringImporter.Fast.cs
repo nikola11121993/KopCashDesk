@@ -89,12 +89,44 @@ public sealed class SmartSberAcquiringImporter
             ["42638080"] = KnownBusinessRules.MiraPointName
         };
 
+    private static readonly IReadOnlyDictionary<string, string> KnownKopPhysicalTerminalPoints =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["37446495"] = "Хризотил",
+            ["37446500"] = "Хризотил",
+            ["37446501"] = "Хризотил",
+            ["37446502"] = "Хризотил",
+            ["39887320"] = "Кафе Сиеста",
+            ["39887319"] = "Кафе Сиеста",
+            ["39974228"] = "Кафе Сиеста",
+            ["37446428"] = "Лакомка"
+        };
+
     public SmartSberAcquiringImporter(Database database) => _database = database;
 
-    public static string? CanonicalPointNameForTerminal(string terminalId)
+    public static string? CanonicalPointNameForTerminal(string terminalId, string? organizationTaxId = null)
     {
         var tid = DigitsOnly(terminalId);
+        var taxId = DigitsOnly(organizationTaxId ?? string.Empty);
+        if (taxId == KnownOrganizations.KopTaxId &&
+            KnownKopPhysicalTerminalPoints.TryGetValue(tid, out var kopPoint))
+            return kopPoint;
+
         return KnownTerminalPoints.TryGetValue(tid, out var value) ? value : null;
+    }
+
+    public static string? ReconciliationPointNameForTerminal(string terminalId, string? organizationTaxId = null)
+    {
+        var tid = DigitsOnly(terminalId);
+        var taxId = DigitsOnly(organizationTaxId ?? string.Empty);
+
+        // Temporary confirmed rule: TID 37446495 is physically in «Хризотил»,
+        // but its card sales are rung on the Siesta fiscal register
+        // KKT 0014943 / RNM 0001113145061553.
+        if (taxId == KnownOrganizations.KopTaxId && tid == "37446495")
+            return "Кафе Сиеста";
+
+        return CanonicalPointNameForTerminal(tid, taxId);
     }
 
     public SmartSberImportSummary ImportFiles(IEnumerable<string> paths)
@@ -290,9 +322,12 @@ public sealed class SmartSberAcquiringImporter
             var merchantId = DigitsOnly(Get(values, "номер мерчанта"));
             SaveTerminal(organization, location, terminalId, merchantId, SberAcquiringImporter.DetectPaymentMethod(sourcePointName), summary);
 
+            // Keep the terminal bound to its physical point, but allow an explicit fiscal-routing exception.
+            var reconciliationLocation = ResolveReconciliationLocation(organization, terminalId, location, summary);
+
             var externalId = BuildExternalId(taxId, terminalId, rrn, occurredAt, amount, kind);
             _pendingOperations.Add(new CashOperation(
-                Source, externalId, organization.Id, location.Id, occurredAt,
+                Source, externalId, organization.Id, reconciliationLocation.Id, occurredAt,
                 SourceKind.Bank, kind, PaymentKind.Electronic, amount, documentId));
             if (_pendingOperations.Count >= BatchSize) FlushOperations(summary);
         }
@@ -372,6 +407,21 @@ public sealed class SmartSberAcquiringImporter
         return created;
     }
 
+    private Location ResolveReconciliationLocation(
+        Organization organization,
+        string terminalId,
+        Location physicalLocation,
+        SmartSberImportSummary summary)
+    {
+        var targetName = ReconciliationPointNameForTerminal(terminalId, organization.TaxId);
+        if (string.IsNullOrWhiteSpace(targetName) ||
+            SberAcquiringImporter.NormalizeForMatch(targetName) ==
+            SberAcquiringImporter.NormalizeForMatch(physicalLocation.Name))
+            return physicalLocation;
+
+        return FindOrCreateLocation(organization, targetName, string.Empty, summary, trustAddress: false);
+    }
+
     private void SaveTerminal(
         Organization organization,
         Location location,
@@ -408,10 +458,9 @@ public sealed class SmartSberAcquiringImporter
     private void FlushOperations(SmartSberImportSummary summary)
     {
         if (_pendingOperations.Count == 0) return;
-        var attempted = _pendingOperations.Count;
-        var inserted = _database.InsertOperationsBatch(_pendingOperations);
-        summary.OperationsAdded += inserted;
-        summary.DuplicatesIgnored += attempted - inserted;
+        var result = _database.UpsertBankOperationsBatch(_pendingOperations);
+        summary.OperationsAdded += result.Inserted;
+        summary.DuplicatesIgnored += result.Updated;
         _pendingOperations.Clear();
     }
 
