@@ -155,6 +155,7 @@ public static class CrossSourceShiftExtensions
             """);
 
         var newMatches = 0;
+        var crossSourceMatches = 0;
         foreach (var match in desiredMatches)
         {
             var id = DeterministicGuid($"match|{match.Taxcom.Id}|{match.Frontol.Id}");
@@ -162,15 +163,30 @@ public static class CrossSourceShiftExtensions
             InsertMatch(db, tx, id, match, createdAt);
             MarkOperationRole(db, tx, match.Frontol, "FiscalObservation");
 
+            var isCrossSource = !string.Equals(match.Taxcom.Source, match.Frontol.Source, StringComparison.Ordinal);
+            if (isCrossSource) crossSourceMatches++;
+
             if (existingMatchCreated.ContainsKey(id.ToString())) continue;
-            newMatches++;
-            Audit(db, tx, "Cross-source fiscal shift matched",
-                $"organization={match.Taxcom.Organization}; organization_id={match.Taxcom.OrganizationId}; " +
-                $"location={match.Taxcom.Location}; location_id={match.Taxcom.LocationId}; " +
-                $"taxcom_shift_id={match.Taxcom.Id}; frontol_shift_id={match.Frontol.Id}; " +
-                $"date={match.Taxcom.BusinessDate:yyyy-MM-dd}; total_kopecks={match.Taxcom.TotalKopecks}; " +
-                $"cash_kopecks={match.Taxcom.CashKopecks}; electronic_kopecks={match.Taxcom.ElectronicKopecks}; " +
-                $"time_difference_seconds={match.DeltaSeconds}; canonical_source={Taxcom}");
+            if (isCrossSource)
+            {
+                newMatches++;
+                Audit(db, tx, "Cross-source fiscal shift matched",
+                    $"organization={match.Taxcom.Organization}; organization_id={match.Taxcom.OrganizationId}; " +
+                    $"location={match.Taxcom.Location}; location_id={match.Taxcom.LocationId}; " +
+                    $"taxcom_shift_id={match.Taxcom.Id}; frontol_shift_id={match.Frontol.Id}; " +
+                    $"date={match.Taxcom.BusinessDate:yyyy-MM-dd}; total_kopecks={match.Taxcom.TotalKopecks}; " +
+                    $"cash_kopecks={match.Taxcom.CashKopecks}; electronic_kopecks={match.Taxcom.ElectronicKopecks}; " +
+                    $"time_difference_seconds={match.DeltaSeconds}; canonical_source={Taxcom}");
+            }
+            else
+            {
+                Audit(db, tx, "Taxcom shift revision collapsed",
+                    $"organization={match.Taxcom.Organization}; organization_id={match.Taxcom.OrganizationId}; " +
+                    $"location={match.Taxcom.Location}; location_id={match.Taxcom.LocationId}; " +
+                    $"canonical_shift_id={match.Taxcom.Id}; older_shift_id={match.Frontol.Id}; " +
+                    $"date={match.Taxcom.BusinessDate:yyyy-MM-dd}; canonical_total_kopecks={match.Taxcom.TotalKopecks}; " +
+                    $"older_total_kopecks={match.Frontol.TotalKopecks}");
+            }
         }
 
         var newConflicts = 0;
@@ -197,7 +213,7 @@ public static class CrossSourceShiftExtensions
         }
 
         tx.Commit();
-        return new(desiredMatches.Count, newMatches, desiredConflicts.Count, newConflicts);
+        return new(crossSourceMatches, newMatches, desiredConflicts.Count, newConflicts);
     }
 
     public static IReadOnlyList<CrossSourceShiftLinkView> CrossSourceShiftLinks(this Database database)
