@@ -123,7 +123,7 @@ public static class SmartReportDetector
             "сумма выручки", "сумма выручки наличными", "сумма выручки безналичными"
         };
         if (firstOfdCore.All(seen.Contains) &&
-            (seen.Contains("отчет по сменам с налогами") ||
+            (seen.Any(x => x.StartsWith("отчет по сменам с налогами", StringComparison.Ordinal)) ||
              normalizedFileName.Contains("отчет по сменам с налогами", StringComparison.Ordinal)))
             return SmartImportKind.FirstOfd;
 
