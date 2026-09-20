@@ -103,7 +103,6 @@ public sealed class SmartImportDetectionTests
     public void KopKnownTerminal_UsesFiscalReconciliationPoint(string terminal, string expected)
         => Assert.Equal(expected, SmartSberAcquiringImporter.CanonicalPointNameForTerminal(terminal, "6603017238"));
 
-    [Fact]
     [Theory]
     [InlineData("37446495")]
     [InlineData("37446498")]
