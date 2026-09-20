@@ -114,10 +114,9 @@ public sealed class SmartSberAcquiringImporter
             ["37446502"] = "Хризотил",
 
             // ВРЕМЕННОЕ ПОДТВЕРЖДЁННОЕ ПРАВИЛО:
-            // терминал физически находится в Хризотиле, но его продажи пробиваются на кассе Сиесты
-            // (ККТ зав. № 0014943, РНМ 0001113145061553).
-            // Для сверки банка с кассой он обязан попадать в «Кафе Сиеста».
-            ["37446495"] = "Кафе Сиеста",
+            // терминал физически находится в Хризотиле, но его продажи пробиваются на кассе Сиесты.
+            // Физическая привязка терминала остаётся «Хризотил»; финансовая сверка маршрутизируется отдельно.
+            ["37446495"] = "Хризотил",
 
             // Собственные каналы Кафе Сиеста.
             ["39887320"] = "Кафе Сиеста",
@@ -139,6 +138,20 @@ public sealed class SmartSberAcquiringImporter
             return kopPoint;
 
         return KnownTerminalPoints.TryGetValue(tid, out var value) ? value : null;
+    }
+
+    public static string? ReconciliationPointNameForTerminal(string terminalId, string? organizationTaxId = null)
+    {
+        var tid = DigitsOnly(terminalId);
+        var taxId = DigitsOnly(organizationTaxId ?? string.Empty);
+
+        // Temporary real-world exception:
+        // TID 37446495 stands physically at «Хризотил», but its card sales are rung
+        // on the Siesta fiscal register (KKT 0014943 / RNM 0001113145061553).
+        if (taxId == KnownOrganizations.KopTaxId && tid == "37446495")
+            return "Кафе Сиеста";
+
+        return CanonicalPointNameForTerminal(tid, taxId);
     }
 
     public SmartSberImportSummary ImportFiles(IEnumerable<string> paths)
@@ -340,9 +353,14 @@ public sealed class SmartSberAcquiringImporter
             SaveTerminal(organization, location, terminalId, merchantId,
                 SberAcquiringImporter.DetectPaymentMethod(sourcePointName), summary);
 
+            // Normally the bank operation is reconciled against the cash register of the same physical point.
+            // The confirmed temporary exception TID 37446495 remains physically bound to «Хризотил»,
+            // but its bank amount is compared with «Кафе Сиеста».
+            var reconciliationLocation = ResolveReconciliationLocation(organization, terminalId, location, summary);
+
             var externalId = BuildExternalId(taxId, terminalId, rrn, occurredAt, amount, kind);
             var inserted = _database.UpsertBankOperation(new CashOperation(
-                Source, externalId, organization.Id, location.Id, occurredAt,
+                Source, externalId, organization.Id, reconciliationLocation.Id, occurredAt,
                 SourceKind.Bank, kind, PaymentKind.Electronic, amount, documentId));
             if (inserted) summary.OperationsAdded++;
             else summary.DuplicatesIgnored++;
@@ -392,6 +410,32 @@ public sealed class SmartSberAcquiringImporter
         // Known TIDs are allowed to create only their confirmed canonical point. Source address is intentionally
         // ignored: reports have contained wrong house numbers (for example 64 instead of 62 for Кулинария Аппетит).
         var created = new Location(Guid.NewGuid(), organization.Id, canonical);
+        _database.Save(created);
+        _locations.Add(created);
+        summary.LocationsCreated++;
+        return created;
+    }
+
+    private Location ResolveReconciliationLocation(
+        Organization organization,
+        string terminalId,
+        Location physicalLocation,
+        SmartSberImportSummary summary)
+    {
+        var reconciliationName = ReconciliationPointNameForTerminal(terminalId, organization.TaxId);
+        if (string.IsNullOrWhiteSpace(reconciliationName) ||
+            SberAcquiringImporter.NormalizeForMatch(reconciliationName) ==
+            SberAcquiringImporter.NormalizeForMatch(physicalLocation.Name))
+            return physicalLocation;
+
+        var key = SberAcquiringImporter.NormalizeForMatch(reconciliationName);
+        var matches = _locations.Where(x => x.OrganizationId == organization.Id && x.IsActive &&
+            SberAcquiringImporter.NormalizeForMatch(x.Name) == key).ToArray();
+        if (matches.Length == 1) return matches[0];
+        if (matches.Length > 1)
+            throw new InvalidDataException($"Найдено несколько точек «{reconciliationName}» для специального правила TID {terminalId}.");
+
+        var created = new Location(Guid.NewGuid(), organization.Id, reconciliationName);
         _database.Save(created);
         _locations.Add(created);
         summary.LocationsCreated++;
