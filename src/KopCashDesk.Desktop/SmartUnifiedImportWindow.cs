@@ -346,7 +346,7 @@ public sealed class SmartUnifiedImportWindow : Window
                 SmartKnownRules.PrepareCleanDatabase(_database);
                 Report("проверяю совпадения источников и завершаю импорт");
                 var matching = _database.RebuildCrossSourceShiftMatches();
-                result.Add($"ПРОВЕРКА ИСТОЧНИКОВ\nСовпавших Taxcom + Frontol: {matching.MatchedPairs}\nКонфликтов, требующих проверки: {matching.Conflicts}");
+                result.Add($"ПРОВЕРКА ИСТОЧНИКОВ\nСовпало Такском + Frontol: {matching.MatchedPairs}\nРасхождений Такском ↔ Frontol: {matching.Conflicts}\nПри расхождении в итог кассы берётся Такском; Frontol остаётся проверочным источником.");
                 return string.Join("\n\n------------------------------\n\n", result);
             });
 
