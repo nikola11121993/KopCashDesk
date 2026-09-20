@@ -25,7 +25,10 @@ public static class DayOperationDetails
                             THEN 'Совпало с Такском — Frontol проверочный, не учтён повторно'
                         WHEN o.source='Frontol.Report' THEN 'Frontol без подтверждения ОФД — в итог не включён'
                         WHEN EXISTS(SELECT 1 FROM canonical_fiscal_operations f WHERE f.id=o.id)
-                            THEN CASE WHEN o.source LIKE 'Taxcom.%' THEN 'Такском — учтено в кассе' ELSE 'Учтено в кассе' END
+                            THEN CASE
+                                WHEN o.source LIKE 'Taxcom.%' THEN 'Такском — учтено в кассе'
+                                WHEN o.source='FirstOFD.ShiftReport' THEN 'Первый ОФД — учтено в кассе'
+                                ELSE 'Учтено в кассе' END
                         ELSE 'Подтверждение / перекрыто сменой — повторно не учтено' END,
                    COALESCE(d.original_name,'')
             FROM operations o LEFT JOIN source_documents d ON d.id=o.document_id
