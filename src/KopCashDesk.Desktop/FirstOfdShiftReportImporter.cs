@@ -285,7 +285,9 @@ public sealed class FirstOfdShiftReportImporter
     {
         rule = null!;
         if (Digits(organization.TaxId) != KnownOrganizations.KopTaxId) return false;
-        return KopRegisters.TryGetValue(Normalize(display), out rule!);
+        if (!KopRegisters.TryGetValue(Normalize(display), out var found)) return false;
+        rule = found;
+        return true;
     }
 
     private static bool IsHeader(Dictionary<int, string> headers)
