@@ -7,6 +7,51 @@ public readonly record struct FiscalBatchResult(int Inserted, int Updated);
 
 public static class DatabaseBulkExtensions
 {
+    public static bool UpsertBankOperation(this Database database, CashOperation operation)
+    {
+        using var db = Open(database);
+        using var transaction = db.BeginTransaction();
+
+        using var exists = db.CreateCommand();
+        exists.Transaction = transaction;
+        exists.CommandText = "SELECT EXISTS(SELECT 1 FROM operations WHERE source=$source AND external_id=$external)";
+        exists.Parameters.AddWithValue("$source", operation.Source);
+        exists.Parameters.AddWithValue("$external", operation.ExternalId);
+        var existed = Convert.ToInt64(exists.ExecuteScalar()) != 0;
+
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO operations(
+                id,source,external_id,organization_id,location_id,occurred_at,source_kind,kind,payment,amount_kopecks,document_id)
+            VALUES($id,$source,$external,$org,$loc,$time,$sourceKind,$kind,$payment,$amount,$document)
+            ON CONFLICT(source,external_id) DO UPDATE SET
+                organization_id=excluded.organization_id,
+                location_id=excluded.location_id,
+                occurred_at=excluded.occurred_at,
+                source_kind=excluded.source_kind,
+                kind=excluded.kind,
+                payment=excluded.payment,
+                amount_kopecks=excluded.amount_kopecks,
+                document_id=excluded.document_id
+            """;
+        command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+        command.Parameters.AddWithValue("$source", operation.Source);
+        command.Parameters.AddWithValue("$external", operation.ExternalId);
+        command.Parameters.AddWithValue("$org", operation.OrganizationId.ToString());
+        command.Parameters.AddWithValue("$loc", (object?)operation.LocationId?.ToString() ?? DBNull.Value);
+        command.Parameters.AddWithValue("$time", operation.OccurredAt.ToString("O"));
+        command.Parameters.AddWithValue("$sourceKind", operation.SourceKind.ToString());
+        command.Parameters.AddWithValue("$kind", operation.Kind.ToString());
+        command.Parameters.AddWithValue("$payment", operation.Payment.ToString());
+        command.Parameters.AddWithValue("$amount", Money.ToKopecks(operation.Amount));
+        command.Parameters.AddWithValue("$document", (object?)operation.SourceDocumentId ?? DBNull.Value);
+        command.ExecuteNonQuery();
+
+        transaction.Commit();
+        return !existed;
+    }
+
     public static int InsertOperationsBatch(this Database database, IReadOnlyCollection<CashOperation> operations)
     {
         if (operations.Count == 0) return 0;
