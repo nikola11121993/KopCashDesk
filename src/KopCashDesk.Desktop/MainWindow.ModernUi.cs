@@ -5,8 +5,8 @@ namespace KopCashDesk.Desktop;
 
 public partial class MainWindow
 {
-    private const string SummaryHint = "Такском — основной кассовый источник. Frontol используется только для проверки. Если суммы различаются, в итог всё равно берётся Такском, а строка помечается «Расхождение с Frontol».";
-    private const string ReconciliationHint = "Сверка терминала с кассой: кассовая сумма берётся из Такском. Frontol только проверяет её и не складывается повторно. Более поздняя касса может закрывать более ранний терминальный остаток.";
+    private const string SummaryHint = "ОФД — основной кассовый источник (Такском / Первый ОФД). Frontol используется только для проверки и второй раз в итог не складывается.";
+    private const string ReconciliationHint = "Сверка терминала с кассой: кассовая сумма берётся из ОФД (Такском / Первый ОФД). Frontol только проверяет её и не складывается повторно. Более поздняя касса может закрывать более ранний терминальный остаток.";
 
     private void ModernMainWindow_Loaded(object sender, RoutedEventArgs e)
     {
