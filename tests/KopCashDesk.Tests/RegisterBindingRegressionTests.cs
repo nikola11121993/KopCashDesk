@@ -108,24 +108,30 @@ public sealed class RegisterBindingRegressionTests
     }
 
     [Fact]
-    public void IndependentFrontolAndTaxcom_ShiftSourcesBothContributeToFifo()
+    public void IndependentFrontolShift_DoesNotIncreaseOfficialTaxcomCash()
     {
         using var f = new Fixture(); f.Bind("111", "991");
         f.Import("Меркурий 180Ф", "111", "991", 3457, point: "Столовая АТИ");
         f.Shift("Frontol.Report", "frontol", new DateTimeOffset(2026, 8, 31, 18, 0, 0, TimeSpan.FromHours(5)), 100);
         f.Db.Insert(new("UBRiR", "historic", f.Org.Id, f.Point.Id, new DateTimeOffset(2026, 8, 31, 10, 0, 0, TimeSpan.FromHours(5)), SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 3557));
-        Assert.Equal(3557m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
-        var fifo = Assert.Single(f.Db.ReconciliationDays()); Assert.Equal(3557m, fifo.CashElectronic); Assert.Equal(0m, fifo.DayRemaining);
+        Assert.Equal(3457m, Assert.Single(f.Db.PointDaySummaries()).FiscalElectronic);
+        var fifo = Assert.Single(f.Db.ReconciliationDays());
+        Assert.Equal(3457m, fifo.CashElectronic);
+        Assert.Equal(100m, fifo.DayRemaining);
     }
 
     [Fact]
-    public void SourceConflict_DoesNotProduceCashOrFifoAllocations()
+    public void FrontolMismatch_KeepsTaxcomAsOfficialCash()
     {
         using var f = new Fixture(); f.Bind("111", "991");
         f.Import("Меркурий 180Ф", "111", "991", 75952, 1, "09.06.2026 15:00:00", point: "Столовая АТИ");
         f.Shift("Frontol.Report", "frontol", new DateTimeOffset(2026, 6, 9, 15, 1, 0, TimeSpan.FromHours(5)), 96101);
-        var day = Assert.Single(f.Db.PointDaySummaries()); Assert.True(day.HasSourceConflict); Assert.Null(day.FiscalElectronic);
-        Assert.Equal(2, f.Db.ShiftDetails(f.Org.Id, f.Point.Id).Count); Assert.Empty(f.Db.ReconciliationAllocations(f.Org.Id, f.Point.Id));
+        var day = Assert.Single(f.Db.PointDaySummaries());
+        Assert.True(day.HasSourceConflict);
+        Assert.Equal(75952m, day.FiscalElectronic);
+        Assert.Equal(75952m, day.ShiftTotal);
+        Assert.Equal(2, f.Db.ShiftDetails(f.Org.Id, f.Point.Id).Count);
+        Assert.Empty(f.Db.ReconciliationAllocations(f.Org.Id, f.Point.Id));
     }
 
     [Fact]
@@ -221,7 +227,7 @@ public sealed class RegisterBindingRegressionTests
         f.Db.Save(new ShiftClosure("Frontol.Report", "f", f.Org.Id, f.Point.Id, date, 100, 0, 100, KktSerial: "222"));
         f.Db.RebuildCrossSourceShiftMatches();
         Assert.Empty(f.Db.CrossSourceShiftLinks());
-        Assert.Equal(2, Assert.Single(f.Db.PointDaySummaries()).ShiftCount);
+        Assert.Equal(1, Assert.Single(f.Db.PointDaySummaries()).ShiftCount);
     }
 
     private sealed class Fixture : IDisposable
