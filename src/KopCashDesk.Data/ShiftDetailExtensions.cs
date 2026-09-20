@@ -52,7 +52,9 @@ public static class ShiftDetailExtensions
                                     ? "Повторная запись источника — не учтена"
                                     : source == "Taxcom.ShiftReport"
                                         ? "Такском — учтено"
-                                        : "Учтено";
+                                        : source == "FirstOFD.ShiftReport"
+                                            ? "Первый ОФД — учтено"
+                                            : "Учтено";
 
             result.Add(new(r.GetString(0), source, r.GetString(2), name, r.GetString(4), fn, r.GetString(6), r.IsDBNull(7) ? null : r.GetInt32(7), closed,
                 Money.FromKopecks(r.GetInt64(9)), Money.FromKopecks(r.GetInt64(10)), Money.FromKopecks(r.GetInt64(11)), status, included, r.GetString(14)));
