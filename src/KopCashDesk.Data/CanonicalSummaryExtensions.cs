@@ -60,8 +60,9 @@ public static class CanonicalSummaryExtensions
                     organization_id,
                     location_id,
                     MAX(CASE WHEN source='Taxcom.ShiftReport' THEN 1 ELSE 0 END) AS has_taxcom,
+                    MAX(CASE WHEN source='FirstOFD.ShiftReport' THEN 1 ELSE 0 END) AS has_first_ofd,
                     MAX(CASE WHEN source='Frontol.Report' THEN 1 ELSE 0 END) AS has_frontol,
-                    MAX(CASE WHEN source NOT IN ('Taxcom.ShiftReport','Frontol.Report') THEN 1 ELSE 0 END) AS has_other
+                    MAX(CASE WHEN source NOT IN ('Taxcom.ShiftReport','FirstOFD.ShiftReport','Frontol.Report') THEN 1 ELSE 0 END) AS has_other
                 FROM shift_closures
                 GROUP BY substr(closed_at,1,10), organization_id, location_id
             ),
@@ -119,11 +120,13 @@ public static class CanonicalSummaryExtensions
                 COALESCE(shifts.shift_count,0),
                 shifts.last_closed_at,
                 CASE
-                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 AND COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Taxcom (основной) + Frontol (проверка) + фискальные документы'
-                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 THEN 'Taxcom (основной) + Frontol (проверка)'
-                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Taxcom — смены + фискальные документы'
-                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 THEN 'Taxcom'
-                    WHEN COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Taxcom — фискальные документы'
+                    WHEN COALESCE(raw_sources.has_first_ofd,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 THEN 'Первый ОФД (основной) + Frontol (проверка)'
+                    WHEN COALESCE(raw_sources.has_first_ofd,0)=1 THEN 'Первый ОФД'
+                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 AND COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Такском (основной) + Frontol (проверка) + фискальные документы'
+                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 THEN 'Такском (основной) + Frontol (проверка)'
+                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Такском — смены + фискальные документы'
+                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 THEN 'Такском'
+                    WHEN COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Такском — фискальные документы'
                     WHEN COALESCE(raw_sources.has_frontol,0)=1 THEN 'Frontol — проверка, в итог не включён'
                     WHEN COALESCE(raw_sources.has_other,0)=1 THEN 'Другой кассовый источник'
                     ELSE ''
