@@ -105,11 +105,39 @@ public sealed class SmartSberAcquiringImporter
             ["42638080"] = KnownBusinessRules.MiraPointName
         };
 
+    private static readonly IReadOnlyDictionary<string, string> KnownKopTerminalPoints =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            // Хризотил. Основной POS и его QR/SBP каналы пробиваются на кассе Хризотила.
+            ["37446500"] = "Хризотил",
+            ["37446501"] = "Хризотил",
+            ["37446502"] = "Хризотил",
+
+            // ВРЕМЕННОЕ ПОДТВЕРЖДЁННОЕ ПРАВИЛО:
+            // терминал физически находится в Хризотиле, но его продажи пробиваются на кассе Сиесты
+            // (ККТ зав. № 0014943, РНМ 0001113145061553).
+            // Для сверки банка с кассой он обязан попадать в «Кафе Сиеста».
+            ["37446495"] = "Кафе Сиеста",
+
+            // Собственные каналы Кафе Сиеста.
+            ["39887320"] = "Кафе Сиеста",
+            ["39887319"] = "Кафе Сиеста",
+            ["39974228"] = "Кафе Сиеста",
+
+            // Лакомка.
+            ["37446428"] = "Лакомка"
+        };
+
     public SmartSberAcquiringImporter(Database database) => _database = database;
 
-    public static string? CanonicalPointNameForTerminal(string terminalId)
+    public static string? CanonicalPointNameForTerminal(string terminalId, string? organizationTaxId = null)
     {
         var tid = DigitsOnly(terminalId);
+        var taxId = DigitsOnly(organizationTaxId ?? string.Empty);
+        if (taxId == KnownOrganizations.KopTaxId &&
+            KnownKopTerminalPoints.TryGetValue(tid, out var kopPoint))
+            return kopPoint;
+
         return KnownTerminalPoints.TryGetValue(tid, out var value) ? value : null;
     }
 
@@ -313,7 +341,7 @@ public sealed class SmartSberAcquiringImporter
                 SberAcquiringImporter.DetectPaymentMethod(sourcePointName), summary);
 
             var externalId = BuildExternalId(taxId, terminalId, rrn, occurredAt, amount, kind);
-            var inserted = _database.Insert(new CashOperation(
+            var inserted = _database.UpsertBankOperation(new CashOperation(
                 Source, externalId, organization.Id, location.Id, occurredAt,
                 SourceKind.Bank, kind, PaymentKind.Electronic, amount, documentId));
             if (inserted) summary.OperationsAdded++;
@@ -352,7 +380,7 @@ public sealed class SmartSberAcquiringImporter
         }
 
         // Never trust a new TST name/address to create a point. Only a confirmed TID or a manual binding is accepted.
-        var canonical = CanonicalPointNameForTerminal(terminalId);
+        var canonical = CanonicalPointNameForTerminal(terminalId, organization.TaxId);
         if (canonical is null) return null;
 
         var key = SberAcquiringImporter.NormalizeForMatch(canonical);
