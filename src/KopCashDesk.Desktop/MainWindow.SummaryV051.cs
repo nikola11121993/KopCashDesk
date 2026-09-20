@@ -11,7 +11,7 @@ public partial class MainWindow
     private UIElement RenderSummaryV051()
     {
         PageTitle.Text = "Свод по точкам";
-        PageSubtitle.Text = "Терминалы, касса, закрытия смен и ручные корректировки";
+        PageSubtitle.Text = "Такском — основной кассовый источник. Frontol используется только для проверки и второй раз в итог не складывается.";
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -69,13 +69,6 @@ public partial class MainWindow
             if (row.Sber is null)
             {
                 MessageBox.Show(this, "За этот день нет суммы терминала.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
-                RefreshData();
-                return;
-            }
-
-            if (row.Status.Contains("Конфликт кассовых источников", StringComparison.OrdinalIgnoreCase))
-            {
-                MessageBox.Show(this, "За этот день есть конфликт Taxcom/Frontol. Сначала проверьте кассовые источники.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Warning);
                 RefreshData();
                 return;
             }
@@ -274,17 +267,16 @@ public partial class MainWindow
                     var bank = SumNullable(g.Select(x => x.Sber));
                     var cash = SumNullable(g.Select(x => x.CashElectronic));
                     var shiftTotal = SumNullable(g.Select(x => x.ShiftTotal));
-                    var hasConflict = g.Any(x => x.Status.Contains("Конфликт кассовых источников", StringComparison.OrdinalIgnoreCase));
+                    var hasFrontolMismatch = g.Any(x => x.Status.Contains("Расхождение с Frontol", StringComparison.OrdinalIgnoreCase));
                     var missingCash = g.Any(x => x.Sber is not null && x.CashElectronic is null);
                     var missingBank = g.Any(x => x.Sber is null && x.CashElectronic is not null);
-                    var complete = !missingCash && !missingBank && !hasConflict;
+                    var complete = !missingCash && !missingBank;
                     var difference = complete && bank is not null && cash is not null ? cash - bank : null;
                     var lastClosed = g.Where(x => x.LastClosedAt is not null).Select(x => x.LastClosedAt).Max();
-                    var status = hasConflict
-                        ? "Конфликт кассовых источников — требуется проверка"
-                        : complete
-                            ? SummaryStatus(bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), difference, g.Any(x => x.CashFromSber))
-                            : "Неполные данные";
+                    var status = complete
+                        ? SummaryStatus(bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), difference, g.Any(x => x.CashFromSber)) +
+                          (hasFrontolMismatch ? " — Расхождение с Frontol, в итог взят Такском" : "")
+                        : "Неполные данные" + (hasFrontolMismatch ? " — Расхождение с Frontol, в итог взят Такском" : "");
                     return new MonthSummaryRow(g.Key.Year, g.Key.Month, g.Key.OrganizationId, g.Key.LocationId, g.Key.Organization, g.Key.Point,
                         bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), lastClosed, difference, status);
                 })
@@ -295,12 +287,12 @@ public partial class MainWindow
             var cashTotal = SumNullable(dayRows.Select(x => x.CashElectronic));
             var shiftGrandTotal = SumNullable(dayRows.Select(x => x.ShiftTotal));
             var incompleteDays = dayRows.Count(x => (x.Sber is null) != (x.CashElectronic is null));
-            var conflictDays = dayRows.Count(x => x.Status.Contains("Конфликт кассовых источников", StringComparison.OrdinalIgnoreCase));
+            var frontolMismatchDays = dayRows.Count(x => x.Status.Contains("Расхождение с Frontol", StringComparison.OrdinalIgnoreCase));
             var manualDays = manualCash.Keys.Concat(manualTerminal.Keys).Distinct().Count();
-            totals.Text = $"Терминал за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
+            totals.Text = $"Терминал за период: {MoneyText(bankTotal)}     •     Касса безнал (Такском): {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
                           (manualDays > 0 ? $"     •     Ручных дней: {manualDays}" : "") +
                           (incompleteDays > 0 ? $"     •     Неполных дней: {incompleteDays}" : "") +
-                          (conflictDays > 0 ? $"     •     Конфликтов источников: {conflictDays}" : "");
+                          (frontolMismatchDays > 0 ? $"     •     Расхождений Такском ↔ Frontol: {frontolMismatchDays}" : "");
         }
 
         yearBox.SelectionChanged += (_, _) => RefreshData();
@@ -319,18 +311,29 @@ public partial class MainWindow
         var hasManualCash = manualCash.TryGetValue(key, out var manualElectronic);
         var hasManualTerminal = manualTerminal.ContainsKey(key);
         var cash = hasManualCash ? manualElectronic : row.FiscalElectronic;
-        var copied = !row.HasSourceConflict && hasManualCash && row.BankElectronic is not null && manualElectronic == row.BankElectronic.Value;
-        var difference = !row.HasSourceConflict && row.BankElectronic is not null && cash is not null ? cash - row.BankElectronic : null;
-        var status = row.HasSourceConflict
-            ? $"Конфликт кассовых источников — требуется проверка{SourceSuffix(row.FiscalSources)}"
-            : SummaryStatus(row.BankElectronic, cash, row.ShiftTotal, row.ShiftCount, difference, copied) + SourceSuffix(row.FiscalSources);
+        var copied = hasManualCash && row.BankElectronic is not null && manualElectronic == row.BankElectronic.Value;
+        var difference = row.BankElectronic is not null && cash is not null ? cash - row.BankElectronic : null;
+
+        string status;
+        if (row.FiscalSources.StartsWith("Frontol — проверка", StringComparison.OrdinalIgnoreCase) && row.FiscalElectronic is null)
+        {
+            status = "Есть в Frontol, но нет данных ОФД — Frontol в итог не включён" + SourceSuffix(row.FiscalSources);
+        }
+        else
+        {
+            status = SummaryStatus(row.BankElectronic, cash, row.ShiftTotal, row.ShiftCount, difference, copied);
+            if (row.HasSourceConflict)
+                status += " — Расхождение с Frontol, в итог взят Такском";
+            status += SourceSuffix(row.FiscalSources);
+        }
+
         if (hasManualTerminal) status += " — терминал вручную";
         if (hasManualCash && !copied) status += " — касса вручную";
 
         return new DaySummaryRow(
             row.Date, row.OrganizationId, row.LocationId, row.Organization, row.Location,
             row.BankElectronic, cash, row.FiscalElectronic is not null, copied,
-            row.BankElectronic is not null && !row.HasSourceConflict,
+            row.BankElectronic is not null && row.FiscalElectronic is null,
             row.ShiftTotal, row.ShiftCount, row.LastShiftClosedAt,
             difference, status);
     }
