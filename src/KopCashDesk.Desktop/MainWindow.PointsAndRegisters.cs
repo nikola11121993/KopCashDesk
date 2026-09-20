@@ -233,10 +233,10 @@ public partial class MainWindow
             var taxcom = rows.Where(x => x.Source.Contains("Taxcom", StringComparison.OrdinalIgnoreCase)).ToArray();
             var frontol = rows.Where(x => x.Source.Contains("Frontol", StringComparison.OrdinalIgnoreCase)).ToArray();
             text = title + "\n\n" +
-                   "Почему конфликт: Taxcom и Frontol нашли смены одной точки примерно в одно время, но суммы в источниках различаются. " +
-                   "Программа специально не выбирает одну из них сама.\n" +
-                   $"Taxcom: выручка {taxcom.Sum(x => x.Total):N2} ₽; наличные {taxcom.Sum(x => x.Cash):N2} ₽; безнал {taxcom.Sum(x => x.Electronic):N2} ₽.\n" +
-                   $"Frontol: выручка {frontol.Sum(x => x.Total):N2} ₽; наличные {frontol.Sum(x => x.Cash):N2} ₽; безнал {frontol.Sum(x => x.Electronic):N2} ₽.\n" +
+                   "Расхождение проверки: Такском и Frontol нашли одну и ту же смену примерно в одно время, но суммы различаются. " +
+                   "В итог кассы программа берёт Такском; Frontol используется только как контроль.\n" +
+                   $"Такском (учтён): выручка {taxcom.Sum(x => x.Total):N2} ₽; наличные {taxcom.Sum(x => x.Cash):N2} ₽; безнал {taxcom.Sum(x => x.Electronic):N2} ₽.\n" +
+                   $"Frontol (проверка): выручка {frontol.Sum(x => x.Total):N2} ₽; наличные {frontol.Sum(x => x.Cash):N2} ₽; безнал {frontol.Sum(x => x.Electronic):N2} ₽.\n" +
                    $"Разница безнала: {taxcom.Sum(x => x.Electronic) - frontol.Sum(x => x.Electronic):N2} ₽. Ниже показаны обе исходные записи.";
         }
         else
@@ -267,7 +267,7 @@ public partial class MainWindow
         new Window
         {
             Owner = this,
-            Title = summary?.HasSourceConflict == true ? "Объяснение конфликта" : title,
+            Title = summary?.HasSourceConflict == true ? "Расхождение Такском ↔ Frontol" : title,
             Content = root,
             Width = 1220,
             Height = 680,
