@@ -49,6 +49,12 @@ public sealed class Database
         }
 
         DatabaseMigrations.Apply(this);
+
+        // Refresh derived fiscal view on every start so business-rule changes
+        // (for example Taxcom authoritative / Frontol verification-only) apply
+        // to existing v4 databases without a destructive migration.
+        using (var db = Open())
+            CanonicalFiscalProjection.Create(db);
     }
 
     private static void Execute(SqliteConnection db, string sql, params (string Name, object? Value)[] args)

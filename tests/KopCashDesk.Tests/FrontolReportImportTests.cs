@@ -43,17 +43,19 @@ public sealed class FrontolReportImportTests
             Assert.Equal(2, days.Count);
 
             var september10 = Assert.Single(days, x => x.Date == new DateOnly(2026, 9, 10));
-            Assert.Equal(250m, september10.FiscalElectronic);
-            Assert.Equal(350m, september10.ShiftTotal);
-            Assert.Equal(100m, september10.ShiftCash);
-            Assert.Equal(250m, september10.ShiftElectronic);
-            Assert.Equal(1, september10.ShiftCount);
+            Assert.Null(september10.FiscalElectronic);
+            Assert.Null(september10.ShiftTotal);
+            Assert.Null(september10.ShiftCash);
+            Assert.Null(september10.ShiftElectronic);
+            Assert.Equal(0, september10.ShiftCount);
+            Assert.Equal("Frontol — проверка, в итог не включён", september10.FiscalSources);
 
             var september11 = Assert.Single(days, x => x.Date == new DateOnly(2026, 9, 11));
-            Assert.Equal(-50m, september11.FiscalElectronic);
-            Assert.Equal(-50m, september11.ShiftTotal);
-            Assert.Equal(0m, september11.ShiftCash);
-            Assert.Equal(-50m, september11.ShiftElectronic);
+            Assert.Null(september11.FiscalElectronic);
+            Assert.Null(september11.ShiftTotal);
+            Assert.Null(september11.ShiftCash);
+            Assert.Null(september11.ShiftElectronic);
+            Assert.Equal("Frontol — проверка, в итог не включён", september11.FiscalSources);
 
             var second = new FrontolReportImporter(database, organization.Id, location.Id).ImportFiles([report]);
             Assert.Equal(0, second.FiscalOperationsInserted);
@@ -61,8 +63,8 @@ public sealed class FrontolReportImportTests
 
             var afterRepeat = database.PointDaySummaries(organization.Id, 2026, 9, location.Id);
             Assert.Equal(2, afterRepeat.Count);
-            Assert.Equal(250m, Assert.Single(afterRepeat, x => x.Date == new DateOnly(2026, 9, 10)).FiscalElectronic);
-            Assert.Equal(-50m, Assert.Single(afterRepeat, x => x.Date == new DateOnly(2026, 9, 11)).FiscalElectronic);
+            Assert.Null(Assert.Single(afterRepeat, x => x.Date == new DateOnly(2026, 9, 10)).FiscalElectronic);
+            Assert.Null(Assert.Single(afterRepeat, x => x.Date == new DateOnly(2026, 9, 11)).FiscalElectronic);
         }
         finally
         {

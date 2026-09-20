@@ -36,13 +36,10 @@ public static class CanonicalSummaryExtensions
             canonical_shifts AS (
                 SELECT s.*
                 FROM shift_closures s
-                WHERE NOT EXISTS(
+                WHERE s.source <> 'Frontol.Report'
+                  AND NOT EXISTS(
                     SELECT 1 FROM shift_source_links l WHERE l.observed_shift_id=s.id
-                )
-                AND NOT EXISTS(
-                    SELECT 1 FROM fiscal_source_conflicts c
-                    WHERE c.taxcom_shift_id=s.id OR c.frontol_shift_id=s.id
-                )
+                  )
             ),
             shifts AS (
                 SELECT
@@ -63,8 +60,9 @@ public static class CanonicalSummaryExtensions
                     organization_id,
                     location_id,
                     MAX(CASE WHEN source='Taxcom.ShiftReport' THEN 1 ELSE 0 END) AS has_taxcom,
+                    MAX(CASE WHEN source='FirstOFD.ShiftReport' THEN 1 ELSE 0 END) AS has_first_ofd,
                     MAX(CASE WHEN source='Frontol.Report' THEN 1 ELSE 0 END) AS has_frontol,
-                    MAX(CASE WHEN source NOT IN ('Taxcom.ShiftReport','Frontol.Report') THEN 1 ELSE 0 END) AS has_other
+                    MAX(CASE WHEN source NOT IN ('Taxcom.ShiftReport','FirstOFD.ShiftReport','Frontol.Report') THEN 1 ELSE 0 END) AS has_other
                 FROM shift_closures
                 GROUP BY substr(closed_at,1,10), organization_id, location_id
             ),
@@ -75,11 +73,11 @@ public static class CanonicalSummaryExtensions
                     location_id,
                     MAX(CASE WHEN source='Taxcom.FiscalDocuments' THEN 1 ELSE 0 END) AS has_taxcom_documents
                 FROM operations
-                WHERE location_id IS NOT NULL AND source_kind='Fiscal'
+                WHERE location_id IS NOT NULL
                 GROUP BY substr(occurred_at,1,10),organization_id,location_id
             ),
-            conflicts AS (
-                SELECT business_date AS day,organization_id,location_id,COUNT(*) AS conflict_count
+            mismatches AS (
+                SELECT business_date AS day,organization_id,location_id,COUNT(*) AS mismatch_count
                 FROM fiscal_source_conflicts
                 GROUP BY business_date,organization_id,location_id
             ),
@@ -100,7 +98,7 @@ public static class CanonicalSummaryExtensions
                 UNION
                 SELECT day,organization_id,location_id FROM document_sources
                 UNION
-                SELECT day,organization_id,location_id FROM conflicts
+                SELECT day,organization_id,location_id FROM mismatches
                 UNION
                 SELECT day,organization_id,location_id FROM manual_cash
                 UNION
@@ -114,25 +112,26 @@ public static class CanonicalSummaryExtensions
                 loc.name,
                 CASE WHEN manual_terminal.electronic_kopecks IS NOT NULL THEN manual_terminal.electronic_kopecks
                      WHEN COALESCE(op.bank_count,0)>0 THEN op.bank_sum ELSE NULL END,
-                CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL
-                     WHEN COALESCE(op.fiscal_count,0)>0 AND manual_cash.electronic_kopecks IS NOT NULL THEN manual_cash.electronic_kopecks
+                CASE WHEN COALESCE(op.fiscal_count,0)>0 AND manual_cash.electronic_kopecks IS NOT NULL THEN manual_cash.electronic_kopecks
                      WHEN COALESCE(op.fiscal_count,0)>0 THEN op.fiscal_sum ELSE NULL END,
-                CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL ELSE shifts.total_sum END,
-                CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL ELSE shifts.cash_sum END,
-                CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL ELSE shifts.electronic_sum END,
-                CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN 0 ELSE COALESCE(shifts.shift_count,0) END,
+                shifts.total_sum,
+                shifts.cash_sum,
+                shifts.electronic_sum,
+                COALESCE(shifts.shift_count,0),
                 shifts.last_closed_at,
                 CASE
-                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 AND COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Taxcom + Frontol + фискальные документы'
-                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 THEN 'Taxcom + Frontol'
-                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Taxcom — смены + фискальные документы'
-                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 THEN 'Taxcom'
-                    WHEN COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Taxcom — фискальные документы'
-                    WHEN COALESCE(raw_sources.has_frontol,0)=1 THEN 'Frontol'
+                    WHEN COALESCE(raw_sources.has_first_ofd,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 THEN 'Первый ОФД (основной) + Frontol (проверка)'
+                    WHEN COALESCE(raw_sources.has_first_ofd,0)=1 THEN 'Первый ОФД'
+                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 AND COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Такском (основной) + Frontol (проверка) + фискальные документы'
+                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(raw_sources.has_frontol,0)=1 THEN 'Такском (основной) + Frontol (проверка)'
+                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 AND COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Такском — смены + фискальные документы'
+                    WHEN COALESCE(raw_sources.has_taxcom,0)=1 THEN 'Такском'
+                    WHEN COALESCE(document_sources.has_taxcom_documents,0)=1 THEN 'Такском — фискальные документы'
+                    WHEN COALESCE(raw_sources.has_frontol,0)=1 THEN 'Frontol — проверка, в итог не включён'
                     WHEN COALESCE(raw_sources.has_other,0)=1 THEN 'Другой кассовый источник'
                     ELSE ''
                 END,
-                CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN 1 ELSE 0 END
+                CASE WHEN COALESCE(mismatches.mismatch_count,0)>0 THEN 1 ELSE 0 END
             FROM keys k
             JOIN organizations org ON org.id=k.organization_id
             JOIN locations loc ON loc.id=k.location_id
@@ -140,7 +139,7 @@ public static class CanonicalSummaryExtensions
             LEFT JOIN shifts ON shifts.day=k.day AND shifts.organization_id=k.organization_id AND shifts.location_id=k.location_id
             LEFT JOIN raw_sources ON raw_sources.day=k.day AND raw_sources.organization_id=k.organization_id AND raw_sources.location_id=k.location_id
             LEFT JOIN document_sources ON document_sources.day=k.day AND document_sources.organization_id=k.organization_id AND document_sources.location_id=k.location_id
-            LEFT JOIN conflicts ON conflicts.day=k.day AND conflicts.organization_id=k.organization_id AND conflicts.location_id=k.location_id
+            LEFT JOIN mismatches ON mismatches.day=k.day AND mismatches.organization_id=k.organization_id AND mismatches.location_id=k.location_id
             LEFT JOIN manual_cash ON manual_cash.day=k.day AND manual_cash.organization_id=k.organization_id AND manual_cash.location_id=k.location_id
             LEFT JOIN manual_terminal ON manual_terminal.day=k.day AND manual_terminal.organization_id=k.organization_id AND manual_terminal.location_id=k.location_id
             WHERE loc.is_active=1 AND ($org IS NULL OR k.organization_id=$org)

@@ -106,19 +106,7 @@ public partial class MainWindow
             if (yearBox.SelectedItem is not int year) return;
             var month = (monthBox.SelectedItem as ReconciliationMonthOption)?.Number;
             var locationId = (locationBox.SelectedItem as ReconciliationLocationOption)?.Id;
-            var conflictKeys = _db.FiscalSourceConflicts()
-                .Select(x => (x.OrganizationId, x.LocationId, x.BusinessDate))
-                .ToHashSet();
-            var days = _db.ReconciliationDays(SelectedOrganizationId, year, month, locationId)
-                .Select(x => conflictKeys.Contains((x.OrganizationId, x.LocationId, x.Date))
-                    ? x with
-                    {
-                        CashElectronic = null,
-                        RequiresReview = true,
-                        Status = "Конфликт кассовых источников — требуется проверка"
-                    }
-                    : x)
-                .ToArray();
+            var days = _db.ReconciliationDays(SelectedOrganizationId, year, month, locationId).ToArray();
             var rows = days.Select(x => new ReconciliationRow(x)).ToArray();
             grid.ItemsSource = rows;
 

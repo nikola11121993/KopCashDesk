@@ -30,8 +30,8 @@ public static class RegisterBindingService
         return list;
     }
     private static DateOnly? Date(SqliteDataReader r, int i) => r.IsDBNull(i) ? null : DateOnly.Parse(r.GetString(i), CultureInfo.InvariantCulture);
-    private static string Digits(string s) => new(s.Where(char.IsDigit).ToArray());
-    private static string Normalize(string s) => new(s.ToLowerInvariant().Replace('ё', 'е').Where(char.IsLetterOrDigit).ToArray());
+    private static string Digits(string s) => new((s ?? string.Empty).Where(char.IsDigit).ToArray());
+    private static string Normalize(string s) => new((s ?? string.Empty).ToLowerInvariant().Replace('ё', 'е').Where(char.IsLetterOrDigit).ToArray());
     private static bool EqualId(string a, string b) => !string.IsNullOrWhiteSpace(a) && !string.IsNullOrWhiteSpace(b) && Digits(a) == Digits(b);
     private static int IdentityRank(RegisterBinding b, string serial, string fn, string rnm)
     {
@@ -48,7 +48,9 @@ public static class RegisterBindingService
     {
         serial = Digits(serial); fn = Digits(fn); rnm = Digits(rnm);
         var locations = database.Locations().Where(l => l.OrganizationId == org).ToArray();
-        var knownPointName = KnownBusinessRules.PointNameForRegisterSerial(serial);
+        var fixedSevenPolicy = database.Organizations().Any(x => x.Id == org && Digits(x.TaxId) == KnownBusinessRules.CopTaxId);
+        var knownSerial = KnownBusinessRules.IsKnownRegisterSerial(serial);
+        var knownPointName = knownSerial ? KnownBusinessRules.PointNameForRegisterSerial(serial) : null;
         var knownRuleLocation = knownPointName is null ? null : KnownBusinessRules.FindKnownPoint(locations, knownPointName);
 
         var candidates = Read(database).Where(b => b.OrganizationId == org && IdentityRank(b, serial, fn, rnm) > 0).ToArray();
@@ -70,7 +72,6 @@ public static class RegisterBindingService
             else if (knownPointName is not null)
             {
                 // A hard serial rule is stronger than any automatic/name-based observation.
-                // If the physical point cannot be identified uniquely, do not guess from the KKT display name.
                 if (knownRuleLocation is null)
                     return SavePending(database, org, serial, fn, rnm, display, day);
 
@@ -86,6 +87,8 @@ public static class RegisterBindingService
             }
             else
             {
+                // Existing history/manual setup remains valid for an unknown KKT. We only forbid inventing
+                // a new automatic point from an incoming display name/address.
                 var rank = valid.Max(b => IdentityRank(b, serial, fn, rnm));
                 var pool = valid.Where(b => IdentityRank(b, serial, fn, rnm) == rank).ToArray();
                 var source = pool.Max(b => (int)b.BindingSource);
@@ -125,12 +128,26 @@ public static class RegisterBindingService
         // A gap in ordinary known history is not authorization to apply today's weaker display/point rule to an old shift.
         if (candidates.Any(b => b.LocationId is not null)) return SavePending(database, org, serial, fn, rnm, display, day);
 
+        // ООО ЦОП has exactly seven confirmed reporting points. An unknown KKT must remain pending until
+        // Николай assigns it manually; incoming point/address text may never create or choose an eighth point.
+        if (fixedSevenPolicy)
+            return SavePending(database, org, serial, fn, rnm, display, day);
+
         var ruleLocation = RuleLocation(database, locations, serial, display);
         Location? location = ruleLocation;
         if (location is null && !IsGenericPoint(point))
         {
             var matches = locations.Where(l => Normalize(l.Name) == Normalize(point) || (l.Address.Length > 0 && Normalize(l.Address) == Normalize(point))).ToArray();
             if (matches.Length == 1) location = matches[0];
+            else if (matches.Length == 0 && !fixedSevenPolicy)
+            {
+                // For organizations other than ООО ЦОП, a real point name from the fiscal report
+                // is authoritative enough to create the point automatically. The old seven-point
+                // restriction was never meant to cap all organizations together.
+                var cleanName = string.Join(' ', point.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                location = new Location(Guid.NewGuid(), org, cleanName);
+                database.Save(location);
+            }
         }
         var b = new RegisterBinding(Guid.NewGuid(), org, location?.Id, fn, rnm, ruleLocation is null ? BindingSource.Automatic : BindingSource.Rule,
             false, null, null, serial, display);

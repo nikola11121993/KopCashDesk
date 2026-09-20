@@ -8,7 +8,7 @@ namespace KopCashDesk.Data;
 
 public static class ReconciliationExtensions
 {
-    private const int AlgorithmVersion = 2;
+    private const int AlgorithmVersion = 3;
 
     private sealed record BankDay(DateOnly Date, long AmountKopecks, int Count);
     private sealed record CashEvent(DateOnly Date, string Source, string ExternalId, long AmountKopecks, string OccurredAt);
@@ -120,7 +120,7 @@ public static class ReconciliationExtensions
         var conflicts = database.CrossSourceConflictDates(organization.Id, location.Id);
         var manualDates = manualEvents.Select(x => x.Date).ToHashSet();
         var effectiveCashEvents = fiscalEvents.Where(x => !manualDates.Contains(x.Date))
-            .Concat(manualEvents).Where(x => !conflicts.Contains(x.Date))
+            .Concat(manualEvents)
             .OrderBy(x => x.Date)
             .ThenBy(x => x.OccurredAt, StringComparer.Ordinal)
             .ThenBy(x => x.Source, StringComparer.Ordinal)
@@ -240,7 +240,9 @@ public static class ReconciliationExtensions
             allocations, priorOutstanding, endOutstanding, unmatchedCash, reviewDates);
 
         transaction.Commit();
-        return result.Select(x => conflicts.Contains(x.Date) ? x with { RequiresReview = true, Status = "Конфликт источников — требуется проверка" } : x).ToArray();
+        return result.Select(x => conflicts.Contains(x.Date)
+            ? x with { RequiresReview = true, Status = "Расхождение Такском ↔ Frontol — в расчёт взят Такском" }
+            : x).ToArray();
     }
 
     private static IReadOnlyList<ReconciliationDay> BuildRows(
@@ -478,6 +480,7 @@ public static class ReconciliationExtensions
             SELECT closed_at,shift_number
             FROM shift_closures
             WHERE organization_id=$org AND location_id=$loc
+              AND source<>'Frontol.Report'
             ORDER BY closed_at,shift_number
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());

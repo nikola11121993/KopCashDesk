@@ -27,7 +27,7 @@ public sealed class CrossSourceShiftMatchingTests
         Assert.Equal(59460m, summary.ShiftElectronic);
         Assert.Equal(59460m, summary.FiscalElectronic);
         Assert.Equal(1, summary.ShiftCount);
-        Assert.Equal("Taxcom + Frontol", summary.FiscalSources);
+        Assert.Equal("Такском (основной) + Frontol (проверка)", summary.FiscalSources);
         Assert.False(summary.HasSourceConflict);
     }
 
@@ -63,9 +63,11 @@ public sealed class CrossSourceShiftMatchingTests
         Assert.Equal(1, result.Conflicts);
         var summary = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 6, location.Id));
         Assert.True(summary.HasSourceConflict);
-        Assert.Null(summary.FiscalElectronic);
-        Assert.Null(summary.ShiftTotal);
-        Assert.Equal("Taxcom + Frontol", summary.FiscalSources);
+        Assert.Equal(90m, summary.FiscalElectronic);
+        Assert.Equal(100m, summary.ShiftTotal);
+        Assert.Equal(10m, summary.ShiftCash);
+        Assert.Equal(90m, summary.ShiftElectronic);
+        Assert.Equal("Такском (основной) + Frontol (проверка)", summary.FiscalSources);
     }
 
     [Fact]
@@ -189,19 +191,57 @@ public sealed class CrossSourceShiftMatchingTests
 
         Assert.Single(db.FiscalSourceConflicts());
         Assert.Equal(2, db.ShiftClosures(org.Id, location.Id, Day).Count);
-        Assert.Contains(db.AuditEntries(), x => x.Action == "Cross-source fiscal shift conflict");
+        Assert.Contains(db.AuditEntries(), x => x.Action == "Taxcom / Frontol amount mismatch");
     }
 
     [Fact]
-    public void FrontolOnly_HistoryRemainsFinancial()
+    public void FrontolOnly_IsVerificationOnly_AndDoesNotBecomeOfficialCash()
     {
         var (db, org, location) = CreateDb();
         AddShift(db, org, location, Frontol, "front", At(14, 58, 0), 60160m, 700m, 59460m, "", 1);
         db.RebuildCrossSourceShiftMatches();
         var day = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 6, location.Id));
-        Assert.Equal(60160m, day.ShiftTotal);
-        Assert.Equal(59460m, day.FiscalElectronic);
-        Assert.Equal("Frontol", day.FiscalSources);
+        Assert.Null(day.ShiftTotal);
+        Assert.Null(day.FiscalElectronic);
+        Assert.Equal(0, day.ShiftCount);
+        Assert.Equal("Frontol — проверка, в итог не включён", day.FiscalSources);
+    }
+
+    [Fact]
+    public void Mismatch_ReconciliationUsesTaxcom_AndMarksReview()
+    {
+        var (db, org, location) = CreateDb();
+        AddShift(db, org, location, Taxcom, "tax", At(14, 57, 0), 100m, 10m, 90m, "fn", 1);
+        AddShift(db, org, location, Frontol, "front", At(14, 58, 0), 120m, 10m, 110m, "", 1);
+        AddBank(db, org, location, 90m);
+
+        db.RebuildCrossSourceShiftMatches();
+        var day = Assert.Single(db.ReconciliationDays(org.Id, 2026, 6, location.Id));
+
+        Assert.Equal(90m, day.CashElectronic);
+        Assert.Equal(90m, day.BankElectronic);
+        Assert.Equal(0m, day.CumulativeOutstanding);
+        Assert.True(day.RequiresReview);
+        Assert.Equal("Расхождение Такском ↔ Frontol — в расчёт взят Такском", day.Status);
+    }
+
+    [Fact]
+    public void OverlappingTaxcomRevision_KeepsNewestTaxcom_WithoutFrontolMismatch()
+    {
+        var (db, org, location) = CreateDb();
+        AddShift(db, org, location, Taxcom, "tax-old", At(14, 57, 0), 100m, 10m, 90m, "fn", 1);
+        AddShift(db, org, location, Taxcom, "tax-new", At(14, 58, 0), 120m, 20m, 100m, "fn", 1);
+
+        var matching = db.RebuildCrossSourceShiftMatches();
+        var day = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 6, location.Id));
+
+        Assert.Equal(0, matching.MatchedPairs);
+        Assert.Equal(0, matching.Conflicts);
+        Assert.Empty(db.FiscalSourceConflicts());
+        Assert.Equal(120m, day.ShiftTotal);
+        Assert.Equal(100m, day.FiscalElectronic);
+        Assert.False(day.HasSourceConflict);
+        Assert.Contains(db.AuditEntries(), x => x.Action == "Taxcom shift revision collapsed");
     }
 
     [Fact]
@@ -213,7 +253,7 @@ public sealed class CrossSourceShiftMatchingTests
         var day = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 6, location.Id));
         Assert.Equal(60160m, day.ShiftTotal);
         Assert.Equal(59460m, day.FiscalElectronic);
-        Assert.Equal("Taxcom", day.FiscalSources);
+        Assert.Equal("Такском", day.FiscalSources);
     }
 
     private static readonly DateOnly Day = new(2026, 6, 10);

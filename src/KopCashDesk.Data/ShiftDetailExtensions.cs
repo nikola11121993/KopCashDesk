@@ -31,10 +31,33 @@ public static class ShiftDetailExtensions
             if (name.Length == 0) name = registers.FirstOrDefault(b => b.OrganizationId == org && fn.Length > 0 && b.FiscalDriveNumber == fn &&
                 (b.ValidFrom is null || b.ValidFrom <= DateOnly.FromDateTime(closed.DateTime)) && (b.ValidTo is null || b.ValidTo >= DateOnly.FromDateTime(closed.DateTime)))?.DisplayName ?? "";
             if (name.Length == 0) name = fn.Length > 0 ? $"ККТ, ФН {fn}" : r.GetString(1);
-            var duplicate = r.GetInt64(12) != 0; var conflict = r.GetInt64(13) != 0;
-            var status = location is null ? "ККТ не привязана" : conflict ? "Конфликт источников — требуется проверка" : duplicate ? "Подтверждение — повторно не учтено" : "Учтено";
-            result.Add(new(r.GetString(0), r.GetString(1), r.GetString(2), name, r.GetString(4), fn, r.GetString(6), r.IsDBNull(7) ? null : r.GetInt32(7), closed,
-                Money.FromKopecks(r.GetInt64(9)), Money.FromKopecks(r.GetInt64(10)), Money.FromKopecks(r.GetInt64(11)), status, location is not null && !duplicate && !conflict, r.GetString(14)));
+
+            var source = r.GetString(1);
+            var isFrontol = source == "Frontol.Report";
+            var duplicate = r.GetInt64(12) != 0;
+            var mismatch = r.GetInt64(13) != 0;
+            var included = location is not null && !duplicate && !isFrontol;
+
+            var status = location is null
+                ? "ККТ не привязана"
+                : mismatch && isFrontol
+                    ? "Расхождение с Такском — Frontol проверочный, в итог не включён"
+                    : mismatch
+                        ? "Такском — основной источник, учтён; Frontol отличается"
+                        : duplicate && isFrontol
+                            ? "Совпало с Такском — Frontol проверочный, повторно не учтён"
+                            : isFrontol
+                                ? "Есть в кассе Frontol, но нет подтверждения ОФД — в итог не включён"
+                                : duplicate
+                                    ? "Повторная запись источника — не учтена"
+                                    : source == "Taxcom.ShiftReport"
+                                        ? "Такском — учтено"
+                                        : source == "FirstOFD.ShiftReport"
+                                            ? "Первый ОФД — учтено"
+                                            : "Учтено";
+
+            result.Add(new(r.GetString(0), source, r.GetString(2), name, r.GetString(4), fn, r.GetString(6), r.IsDBNull(7) ? null : r.GetInt32(7), closed,
+                Money.FromKopecks(r.GetInt64(9)), Money.FromKopecks(r.GetInt64(10)), Money.FromKopecks(r.GetInt64(11)), status, included, r.GetString(14)));
         }
         return result;
     }

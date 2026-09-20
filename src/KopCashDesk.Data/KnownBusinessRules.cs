@@ -5,13 +5,46 @@ namespace KopCashDesk.Data;
 
 public static class KnownBusinessRules
 {
+    public const string CopTaxId = "6683009222";
+
     public const string ReftinskayaRegisterSerial = "00106900361561";
     public const string ReftinskayaPointName = "Рефтинская ГРЭС 6 столовая";
 
+    public const string LadyzhenskogoRegisterSerial = "00108202518113";
+    public const string LadyzhenskogoPointName = "Ладыженского 7";
+
+    public const string MiraRegisterSerial = "00178945";
+    public const string MiraPointName = "Мира 4 (неактив.)";
+
     public const string AtiAppetitRegisterSerial = "00301000370264";
-    public const string AtiAppetitPointName = "ЗАВОД АТИ";
+    public const string AtiAppetitPointName = "Кулинария Аппетит";
+
     public const string AtiMercuryRegisterSerial = "08050950";
     public const string AtiMercuryPointName = "Столовая АТИ";
+
+    public const string ChapaevaRegisterSerial = "08052160";
+    public const string ChapaevaPointName = "Чапаева 28";
+
+    public const string MusicCollegeRegisterSerial = "00178241";
+    public const string MusicCollegePointName = "Музыкальный колледж";
+
+    public static IReadOnlyList<string> FixedPointNames { get; } =
+    [
+        ReftinskayaPointName,
+        LadyzhenskogoPointName,
+        MiraPointName,
+        AtiAppetitPointName,
+        AtiMercuryPointName,
+        ChapaevaPointName,
+        MusicCollegePointName
+    ];
+
+    public static bool IsKnownRegisterSerial(string serial)
+    {
+        var digits = DigitsOnly(serial);
+        return digits is ReftinskayaRegisterSerial or LadyzhenskogoRegisterSerial or MiraRegisterSerial or
+            AtiAppetitRegisterSerial or AtiMercuryRegisterSerial or ChapaevaRegisterSerial or MusicCollegeRegisterSerial;
+    }
 
     public static string? PointNameForRegisterSerial(string serial)
     {
@@ -19,8 +52,12 @@ public static class KnownBusinessRules
         return digits switch
         {
             ReftinskayaRegisterSerial => ReftinskayaPointName,
+            LadyzhenskogoRegisterSerial => LadyzhenskogoPointName,
+            MiraRegisterSerial => MiraPointName,
             AtiAppetitRegisterSerial => AtiAppetitPointName,
             AtiMercuryRegisterSerial => AtiMercuryPointName,
+            ChapaevaRegisterSerial => ChapaevaPointName,
+            MusicCollegeRegisterSerial => MusicCollegePointName,
             _ => null
         };
     }
@@ -30,6 +67,18 @@ public static class KnownBusinessRules
         var list = locations.Where(x => x.IsActive).ToArray();
         var exact = list.Where(x => Normalize(x.Name) == Normalize(knownPoint)).ToArray();
         if (exact.Length == 1) return exact[0];
+
+        // Compatibility only for an old database. A clean database is normalized to the seven names above.
+        string[] aliases = knownPoint switch
+        {
+            AtiAppetitPointName => ["ЗАВОД АТИ"],
+            AtiMercuryPointName => ["Столовая завода АТИ"],
+            MusicCollegePointName => ["Колледж искусств", "Музыкальный колледж"],
+            MiraPointName => ["Мира 4", "Ленинградская 1", "Вороний Брод", "Белокаменный Кафе", "BUFET"],
+            _ => []
+        };
+        var aliasMatches = list.Where(x => aliases.Any(a => Normalize(x.Name) == Normalize(a))).ToArray();
+        if (aliasMatches.Length == 1) return aliasMatches[0];
 
         if (knownPoint == ReftinskayaPointName)
         {
@@ -55,12 +104,20 @@ public static class KnownBusinessRules
         var backupTaken = false;
         foreach (var organization in database.Organizations())
         {
+            if (DigitsOnly(organization.TaxId) != CopTaxId) continue;
+
+            EnsureSevenLocations(database, organization.Id);
+            MergeConfirmedAliases(database, organization.Id);
+            DeactivateUnexpectedLocations(database, organization.Id);
+            RemoveNonexistent9015(database, organization.Id);
+
+            applied += TryKnownRegisterLocation(database, organization.Id, ReftinskayaRegisterSerial, ReftinskayaPointName, ref backupTaken);
+            applied += TryKnownRegisterLocation(database, organization.Id, LadyzhenskogoRegisterSerial, LadyzhenskogoPointName, ref backupTaken);
+            applied += TryKnownRegisterLocation(database, organization.Id, MiraRegisterSerial, MiraPointName, ref backupTaken);
             applied += TryKnownRegisterLocation(database, organization.Id, AtiAppetitRegisterSerial, AtiAppetitPointName, ref backupTaken);
             applied += TryKnownRegisterLocation(database, organization.Id, AtiMercuryRegisterSerial, AtiMercuryPointName, ref backupTaken);
-
-            // Белокаменный кафе -> Ленинградская 1 -> Мира 4 describes a moving KKT,
-            // not aliases for one address. No date-free history merges, including bank/UBRiR rows.
-            applied += TryReftinskayaDuplicate(database, organization.Id);
+            applied += TryKnownRegisterLocation(database, organization.Id, ChapaevaRegisterSerial, ChapaevaPointName, ref backupTaken);
+            applied += TryKnownRegisterLocation(database, organization.Id, MusicCollegeRegisterSerial, MusicCollegePointName, ref backupTaken);
         }
 
         if (applied > 0)
@@ -69,27 +126,156 @@ public static class KnownBusinessRules
         return applied;
     }
 
+    private static void EnsureSevenLocations(Database database, Guid organizationId)
+    {
+        foreach (var pointName in FixedPointNames)
+        {
+            var all = database.Locations(includeInactive: true)
+                .Where(x => x.OrganizationId == organizationId && Normalize(x.Name) == Normalize(pointName))
+                .ToArray();
+
+            var target = all.FirstOrDefault(x => x.IsActive) ?? all.FirstOrDefault();
+            if (target is null)
+            {
+                database.Save(new Location(Guid.NewGuid(), organizationId, pointName));
+                continue;
+            }
+
+            if (!target.IsActive || target.IsExcluded || target.MergedIntoLocationId is not null || target.Name != pointName)
+            {
+                target = target with
+                {
+                    Name = pointName,
+                    IsActive = true,
+                    IsExcluded = false,
+                    MergedIntoLocationId = null
+                };
+                database.Save(target);
+            }
+
+            foreach (var duplicate in all.Where(x => x.Id != target.Id && x.IsActive))
+                TryMerge(database, duplicate.Id, target.Id, $"дубликат фиксированной точки {pointName}");
+        }
+    }
+
+    private static void MergeConfirmedAliases(Database database, Guid organizationId)
+    {
+        MergeAlias(database, organizationId, "ЗАВОД АТИ", AtiAppetitPointName,
+            "старое название; ККТ 00301000370264 = Кулинария Аппетит");
+        MergeAlias(database, organizationId, "Столовая завода АТИ", AtiMercuryPointName,
+            "старое название; ККТ 08050950 = Столовая АТИ");
+        MergeAlias(database, organizationId, "Колледж искусств", MusicCollegePointName,
+            "подтверждено пользователем: точка называется Музыкальный колледж");
+
+        // One KKT 00178945 moved: Вороний Брод -> Ленинградская 1 -> Мира 4.
+        // For reconciliation the entire history is intentionally shown under the single closed point.
+        MergeAlias(database, organizationId, "Мира 4", MiraPointName, "история ККТ 00178945");
+        MergeAlias(database, organizationId, "Ленинградская 1", MiraPointName, "история ККТ 00178945");
+        MergeAlias(database, organizationId, "Вороний Брод", MiraPointName, "история ККТ 00178945");
+        MergeAlias(database, organizationId, "Белокаменный Кафе", MiraPointName, "история ККТ 00178945");
+        MergeAlias(database, organizationId, "Белокаменный Кафе / BUFET", MiraPointName, "история ККТ 00178945");
+        MergeAlias(database, organizationId, "BUFET", MiraPointName, "история ККТ 00178945");
+    }
+
+    private static void DeactivateUnexpectedLocations(Database database, Guid organizationId)
+    {
+        var allowed = FixedPointNames.Select(Normalize).ToHashSet(StringComparer.Ordinal);
+        foreach (var location in database.Locations().Where(x => x.OrganizationId == organizationId && x.IsActive).ToArray())
+        {
+            if (allowed.Contains(Normalize(location.Name))) continue;
+            database.Save(location with { IsActive = false, MergedIntoLocationId = null });
+            database.Audit("location.fixed-seven.deactivate",
+                $"location={location.Id}; name={location.Name}; reason=ООО ЦОП использует только 7 подтверждённых точек; данные сохранены, точка скрыта до ручного решения");
+        }
+    }
+
+    private static void MergeAlias(Database database, Guid organizationId, string sourceName, string targetName, string reason)
+    {
+        var locations = database.Locations().Where(x => x.OrganizationId == organizationId && x.IsActive).ToArray();
+        var target = locations.SingleOrDefault(x => Normalize(x.Name) == Normalize(targetName));
+        if (target is null) return;
+
+        foreach (var source in locations.Where(x => x.Id != target.Id && Normalize(x.Name) == Normalize(sourceName)).ToArray())
+            TryMerge(database, source.Id, target.Id, reason);
+    }
+
+    private static void TryMerge(Database database, Guid source, Guid target, string reason)
+    {
+        try { database.MergeLocations(source, target, reason); }
+        catch (InvalidOperationException ex)
+        {
+            database.Audit("location.merge.review", $"source={source}; target={target}; reason={reason}; error={ex.Message}");
+        }
+    }
+
+    private static void RemoveNonexistent9015(Database database, Guid organizationId)
+    {
+        using var db = Open(database);
+        using var tx = db.BeginTransaction();
+
+        using var removeRules = db.CreateCommand();
+        removeRules.Transaction = tx;
+        removeRules.CommandText = "DELETE FROM register_location_rules WHERE identity_value='00179015'";
+        removeRules.ExecuteNonQuery();
+
+        using var removeBinding = db.CreateCommand();
+        removeBinding.Transaction = tx;
+        removeBinding.CommandText = "DELETE FROM register_bindings WHERE organization_id=$org AND kkt_serial='00179015'";
+        removeBinding.Parameters.AddWithValue("$org", organizationId.ToString());
+        var deleted = removeBinding.ExecuteNonQuery();
+
+        if (deleted > 0)
+        {
+            using var audit = db.CreateCommand();
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'register.rule.remove',$d)";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.Parameters.AddWithValue("$d", $"removed nonexistent KKT 00179015 bindings={deleted}");
+            audit.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
     private static void EnsureRegisterLocationRules(Database database)
     {
         using var db = Open(database);
         using var tx = db.BeginTransaction();
+
+        using (var clear = db.CreateCommand())
+        {
+            clear.Transaction = tx;
+            // No name/display guesses: an unknown KKT must wait for manual assignment.
+            clear.CommandText = "DELETE FROM register_location_rules WHERE identity_kind IN ('serial','display')";
+            clear.ExecuteNonQuery();
+        }
+
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             INSERT INTO register_location_rules(rule_key,identity_kind,identity_value,target_name,target_address)
             VALUES
-                ('ati-mercury','serial',$mercury,$mercuryPoint,''),
-                ('ati-appetit','serial',$appetit,$appetitPoint,'')
-            ON CONFLICT(rule_key) DO UPDATE SET
-                identity_kind=excluded.identity_kind,
-                identity_value=excluded.identity_value,
-                target_name=excluded.target_name,
-                target_address=excluded.target_address;
+                ('fixed-reftinskaya','serial',$reft,$reftPoint,''),
+                ('fixed-ladyzhenskogo','serial',$lady,$ladyPoint,''),
+                ('fixed-mira-history','serial',$mira,$miraPoint,''),
+                ('fixed-appetit','serial',$appetit,$appetitPoint,''),
+                ('fixed-ati','serial',$ati,$atiPoint,''),
+                ('fixed-chapaeva','serial',$chapaeva,$chapaevaPoint,''),
+                ('fixed-music-college','serial',$college,$collegePoint,'');
             """;
-        command.Parameters.AddWithValue("$mercury", AtiMercuryRegisterSerial);
-        command.Parameters.AddWithValue("$mercuryPoint", AtiMercuryPointName);
+        command.Parameters.AddWithValue("$reft", ReftinskayaRegisterSerial);
+        command.Parameters.AddWithValue("$reftPoint", ReftinskayaPointName);
+        command.Parameters.AddWithValue("$lady", LadyzhenskogoRegisterSerial);
+        command.Parameters.AddWithValue("$ladyPoint", LadyzhenskogoPointName);
+        command.Parameters.AddWithValue("$mira", MiraRegisterSerial);
+        command.Parameters.AddWithValue("$miraPoint", MiraPointName);
         command.Parameters.AddWithValue("$appetit", AtiAppetitRegisterSerial);
         command.Parameters.AddWithValue("$appetitPoint", AtiAppetitPointName);
+        command.Parameters.AddWithValue("$ati", AtiMercuryRegisterSerial);
+        command.Parameters.AddWithValue("$atiPoint", AtiMercuryPointName);
+        command.Parameters.AddWithValue("$chapaeva", ChapaevaRegisterSerial);
+        command.Parameters.AddWithValue("$chapaevaPoint", ChapaevaPointName);
+        command.Parameters.AddWithValue("$college", MusicCollegeRegisterSerial);
+        command.Parameters.AddWithValue("$collegePoint", MusicCollegePointName);
         command.ExecuteNonQuery();
         tx.Commit();
     }
@@ -101,7 +287,7 @@ public static class KnownBusinessRules
         string targetName,
         ref bool backupTaken)
     {
-        var ruleKey = $"known.kkt-location.v1:{organizationId:N}:{serial}";
+        var ruleKey = $"known.kkt-location.v3:{organizationId:N}:{serial}";
         if (IsApplied(database, ruleKey)) return 0;
 
         var locations = database.Locations().Where(x => x.OrganizationId == organizationId && x.IsActive).ToArray();
@@ -157,11 +343,7 @@ public static class KnownBusinessRules
                           WHERE rb.organization_id=shift_closures.organization_id
                             AND rb.is_active=1
                             AND (rb.binding_source='Manual' OR rb.is_locked=1)
-                            AND (
-                                rb.kkt_serial=$serial OR
-                                (rb.kkt_serial='' AND shift_closures.fn<>'' AND rb.fn=shift_closures.fn) OR
-                                (rb.kkt_serial='' AND shift_closures.registration_number<>'' AND rb.register_number=shift_closures.registration_number)
-                            )
+                            AND rb.kkt_serial=$serial
                             AND (rb.valid_from IS NULL OR rb.valid_from<=substr(shift_closures.closed_at,1,10))
                             AND (rb.valid_to IS NULL OR rb.valid_to>=substr(shift_closures.closed_at,1,10))
                       );
@@ -184,11 +366,7 @@ public static class KnownBusinessRules
                           WHERE rb.organization_id=operations.organization_id
                             AND rb.is_active=1
                             AND (rb.binding_source='Manual' OR rb.is_locked=1)
-                            AND (
-                                rb.kkt_serial=$serial OR
-                                (rb.kkt_serial='' AND operations.fn<>'' AND rb.fn=operations.fn) OR
-                                (rb.kkt_serial='' AND operations.registration_number<>'' AND rb.register_number=operations.registration_number)
-                            )
+                            AND rb.kkt_serial=$serial
                             AND (rb.valid_from IS NULL OR rb.valid_from<=substr(operations.occurred_at,1,10))
                             AND (rb.valid_to IS NULL OR rb.valid_to>=substr(operations.occurred_at,1,10))
                       );
@@ -199,8 +377,6 @@ public static class KnownBusinessRules
                 changed += operations.ExecuteNonQuery();
             }
 
-            // Older shift-derived operation rows can lack a serial even when their parent shift has it.
-            // Follow the already-repaired fiscal shift; bank operations are deliberately excluded.
             using (var legacyOperations = db.CreateCommand())
             {
                 legacyOperations.Transaction = tx;
@@ -274,51 +450,6 @@ public static class KnownBusinessRules
         command.ExecuteNonQuery();
     }
 
-    private static int TryAlias(Database database, Guid organizationId, string sourceName, string targetName, string ruleName, string reason)
-    {
-        var ruleKey = $"{ruleName}:{organizationId:N}";
-        if (IsApplied(database, ruleKey)) return 0;
-
-        var locations = database.Locations().Where(x => x.OrganizationId == organizationId).ToArray();
-        var source = locations.Where(x => NameEquals(x.Name, sourceName)).ToArray();
-        var target = locations.Where(x => NameEquals(x.Name, targetName)).ToArray();
-        if (source.Length != 1 || target.Length != 1) return 0;
-
-        if (!database.MergeLocations(source[0].Id, target[0].Id, reason)) return 0;
-        MarkApplied(database, ruleKey, $"{source[0].Name} -> {target[0].Name}");
-        return 1;
-    }
-
-    private static int TryReftinskayaDuplicate(Database database, Guid organizationId)
-    {
-        var ruleKey = $"known.reftinskaya-register:{organizationId:N}";
-        if (IsApplied(database, ruleKey)) return 0;
-
-        var locations = database.Locations().Where(x => x.OrganizationId == organizationId).ToArray();
-        var target = FindKnownPoint(locations, ReftinskayaPointName);
-        if (target is null) return 0;
-
-        var sources = locations.Where(x => x.Id != target.Id && DigitsOnly(x.Name).Contains(ReftinskayaRegisterSerial, StringComparison.Ordinal)).ToArray();
-        if (sources.Length == 0) return 0;
-
-        var merged = 0;
-        foreach (var source in sources)
-        {
-            if (database.RegisterBindings().Any(b => b.LocationId == source.Id && (b.IsLocked || b.BindingSource == BindingSource.Manual))) continue;
-            using var db = Open(database);
-            using var check = db.CreateCommand();
-            database.EnsureManualTerminalPostings();
-            check.CommandText = "SELECT (SELECT COUNT(*) FROM operations WHERE location_id=$loc AND source_kind='Bank') + (SELECT COUNT(*) FROM terminal_bindings WHERE location_id=$loc) + (SELECT COUNT(*) FROM manual_cash_postings WHERE location_id=$loc) + (SELECT COUNT(*) FROM manual_terminal_postings WHERE location_id=$loc)";
-            check.Parameters.AddWithValue("$loc", source.Id.ToString());
-            if (Convert.ToInt64(check.ExecuteScalar()) > 0) continue;
-            if (merged == 0) database.BackupBeforeMigration(4);
-            if (database.MergeLocations(source.Id, target.Id, $"правило ККТ {ReftinskayaRegisterSerial} = {ReftinskayaPointName}")) merged++;
-        }
-
-        if (merged > 0) MarkApplied(database, ruleKey, $"merged={merged}; target={target.Id}");
-        return merged;
-    }
-
     private static bool IsApplied(Database database, string ruleKey)
     {
         using var db = Open(database);
@@ -347,12 +478,10 @@ public static class KnownBusinessRules
                (name.Contains("6 стол", StringComparison.Ordinal) || name.Contains("столовая 6", StringComparison.Ordinal));
     }
 
-    private static bool NameEquals(string left, string right) => Normalize(left) == Normalize(right);
-
     private static string Normalize(string value) =>
-        string.Join(' ', value.Trim().ToLowerInvariant().Replace('ё', 'е').Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        string.Join(' ', (value ?? string.Empty).Trim().ToLowerInvariant().Replace('ё', 'е').Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
-    private static string DigitsOnly(string value) => new(value.Where(char.IsDigit).ToArray());
+    private static string DigitsOnly(string value) => new((value ?? string.Empty).Where(char.IsDigit).ToArray());
 
     private static SqliteConnection Open(Database database)
     {
