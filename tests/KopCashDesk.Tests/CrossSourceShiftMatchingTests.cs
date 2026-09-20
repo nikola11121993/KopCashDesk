@@ -226,6 +226,25 @@ public sealed class CrossSourceShiftMatchingTests
     }
 
     [Fact]
+    public void OverlappingTaxcomRevision_KeepsNewestTaxcom_WithoutFrontolMismatch()
+    {
+        var (db, org, location) = CreateDb();
+        AddShift(db, org, location, Taxcom, "tax-old", At(14, 57, 0), 100m, 10m, 90m, "fn", 1);
+        AddShift(db, org, location, Taxcom, "tax-new", At(14, 58, 0), 120m, 20m, 100m, "fn", 1);
+
+        var matching = db.RebuildCrossSourceShiftMatches();
+        var day = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 6, location.Id));
+
+        Assert.Equal(0, matching.MatchedPairs);
+        Assert.Equal(0, matching.Conflicts);
+        Assert.Empty(db.FiscalSourceConflicts());
+        Assert.Equal(120m, day.ShiftTotal);
+        Assert.Equal(100m, day.FiscalElectronic);
+        Assert.False(day.HasSourceConflict);
+        Assert.Contains(db.AuditEntries(), x => x.Action == "Taxcom shift revision collapsed");
+    }
+
+    [Fact]
     public void TaxcomOnly_HistoryRemainsFinancial()
     {
         var (db, org, location) = CreateDb();
