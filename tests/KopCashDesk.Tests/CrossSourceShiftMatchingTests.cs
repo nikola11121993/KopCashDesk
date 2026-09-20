@@ -27,7 +27,7 @@ public sealed class CrossSourceShiftMatchingTests
         Assert.Equal(59460m, summary.ShiftElectronic);
         Assert.Equal(59460m, summary.FiscalElectronic);
         Assert.Equal(1, summary.ShiftCount);
-        Assert.Equal("Taxcom (основной) + Frontol (проверка)", summary.FiscalSources);
+        Assert.Equal("Такском (основной) + Frontol (проверка)", summary.FiscalSources);
         Assert.False(summary.HasSourceConflict);
     }
 
@@ -67,7 +67,7 @@ public sealed class CrossSourceShiftMatchingTests
         Assert.Equal(100m, summary.ShiftTotal);
         Assert.Equal(10m, summary.ShiftCash);
         Assert.Equal(90m, summary.ShiftElectronic);
-        Assert.Equal("Taxcom (основной) + Frontol (проверка)", summary.FiscalSources);
+        Assert.Equal("Такском (основной) + Frontol (проверка)", summary.FiscalSources);
     }
 
     [Fact]
