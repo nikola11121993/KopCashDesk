@@ -62,34 +62,48 @@ public sealed class ModernImportAndOrganizationTests
     }
 
     [Fact]
-    public void KopHrizotil_37446495_IsRoutedToSiestaForFiscalReconciliation()
+    public void KopHrizotil_18September_SplitsTwoPhysicalTerminalGroupsByFiscalCashRegister()
     {
         using var f = new Fixture();
-        var hrizotilReport = Path.Combine(f.Root, "hrizotil-main.xlsx");
-        var siestaFiscalReport = Path.Combine(f.Root, "hrizotil-second-terminal.xlsx");
+        var files = new List<string>();
 
-        CreateSberWorkbook(hrizotilReport,
-            "ООО КОП", "6603017238", "Хризотил", "г. Асбест, ул. Королева, 30",
-            "37446500", "700000000001", "19.09.2026 12:00:00", "7000");
-        CreateSberWorkbook(siestaFiscalReport,
-            "ООО КОП", "6603017238", "Хризотил", "г. Асбест, ул. Королева, 30",
-            "37446495", "500000000001", "19.09.2026 12:05:00", "500");
+        void Add(string file, string point, string terminal, string rrn, string amount)
+        {
+            var path = Path.Combine(f.Root, file);
+            CreateSberWorkbook(path,
+                "ООО КОП", "6603017238", point, "г. Асбест, ул. Королева, 30",
+                terminal, rrn, "18.09.2026 12:00:00", amount);
+            files.Add(path);
+        }
 
-        var result = new SmartSberAcquiringImporter(f.Db).ImportFiles([hrizotilReport, siestaFiscalReport]);
+        // Main Hrizotil terminal group: 4 355 + 315 + 170 = 4 840.
+        Add("hriz-main.xlsx", "Хризотил", "37446500", "700000000001", "4355");
+        Add("hriz-pqr.xlsx", "Хризотил_P_QR", "37446501", "700000000002", "315");
+        Add("hriz-sbp.xlsx", "Хризотил_SBP", "37446502", "700000000003", "170");
 
-        Assert.Equal(2, result.OperationsAdded);
+        // Second physical terminal in Hrizotil is rung on Siesta KKT:
+        // 12 865 + 860 = 13 725 on 18.09.2026.
+        Add("siesta-routed-pos.xlsx", "Хризотил", "37446495", "500000000001", "12865");
+        Add("siesta-routed-pqr.xlsx", "Хризотил_P_QR", "37446498", "500000000002", "860");
+
+        var result = new SmartSberAcquiringImporter(f.Db).ImportFiles(files);
+
+        Assert.Equal(5, result.OperationsAdded);
         var kop = Assert.Single(f.Db.Organizations(), x => x.TaxId == KnownOrganizations.KopTaxId);
         var locations = f.Db.Locations().Where(x => x.OrganizationId == kop.Id).ToArray();
         var hrizotil = Assert.Single(locations, x => x.Name == "Хризотил");
         var siesta = Assert.Single(locations, x => x.Name == "Кафе Сиеста");
 
-        var day = f.Db.PointDaySummaries(kop.Id, 2026, 9).Where(x => x.Date == new DateOnly(2026, 9, 19)).ToArray();
-        Assert.Equal(7000m, Assert.Single(day, x => x.LocationId == hrizotil.Id).BankElectronic);
-        Assert.Equal(500m, Assert.Single(day, x => x.LocationId == siesta.Id).BankElectronic);
+        var day = f.Db.PointDaySummaries(kop.Id, 2026, 9).Where(x => x.Date == new DateOnly(2026, 9, 18)).ToArray();
+        Assert.Equal(4840m, Assert.Single(day, x => x.LocationId == hrizotil.Id).BankElectronic);
+        Assert.Equal(13725m, Assert.Single(day, x => x.LocationId == siesta.Id).BankElectronic);
 
+        // Equipment remains physically assigned to Hrizotil even when its bank amount
+        // is reconciled against the Siesta fiscal register.
         var bindings = f.Db.TerminalBindings().Where(x => x.OrganizationId == kop.Id).ToArray();
         Assert.Equal(hrizotil.Id, Assert.Single(bindings, x => x.TerminalId == "37446500").LocationId);
         Assert.Equal(hrizotil.Id, Assert.Single(bindings, x => x.TerminalId == "37446495").LocationId);
+        Assert.Equal(hrizotil.Id, Assert.Single(bindings, x => x.TerminalId == "37446498").LocationId);
     }
 
     [Fact]
