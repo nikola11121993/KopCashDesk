@@ -47,6 +47,6 @@ public sealed class FiscalCrossSourceDuplicateTests
         Assert.Equal(1233734m, day.FiscalElectronic);
         Assert.Equal(1233734m, day.ShiftTotal);
         Assert.Equal(1, day.ShiftCount);
-        Assert.Equal("Taxcom (основной) + Frontol (проверка)", day.FiscalSources);
+        Assert.Equal("Такском (основной) + Frontol (проверка)", day.FiscalSources);
     }
 }
