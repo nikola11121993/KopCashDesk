@@ -182,13 +182,15 @@ public static class CrossSourceShiftExtensions
             var id = DeterministicGuid($"conflict|{conflict.Taxcom.Id}|{conflict.Frontol.Id}");
             var createdAt = existingConflictCreated.GetValueOrDefault(id.ToString(), DateTimeOffset.UtcNow.ToString("O"));
             InsertConflict(db, tx, id, conflict, createdAt);
-            MarkOperationRole(db, tx, conflict.Taxcom, "FiscalConflict");
-            MarkOperationRole(db, tx, conflict.Frontol, "FiscalConflict");
+            // Taxcom is authoritative: keep its fiscal operations in the official totals.
+            // Frontol is verification-only and must never replace or double the Taxcom amount.
+            MarkOperationRole(db, tx, conflict.Taxcom, "Fiscal");
+            MarkOperationRole(db, tx, conflict.Frontol, "FiscalObservation");
 
             if (existingConflictCreated.ContainsKey(id.ToString())) continue;
             newConflicts++;
-            Audit(db, tx, "Cross-source fiscal shift conflict",
-                $"organization={conflict.Taxcom.Organization}; organization_id={conflict.Taxcom.OrganizationId}; " +
+            Audit(db, tx, "Taxcom / Frontol amount mismatch",
+                $"authoritative_source={Taxcom}; verification_source={Frontol}; organization={conflict.Taxcom.Organization}; organization_id={conflict.Taxcom.OrganizationId}; " +
                 $"location={conflict.Taxcom.Location}; location_id={conflict.Taxcom.LocationId}; " +
                 $"date={conflict.Taxcom.BusinessDate:yyyy-MM-dd}; taxcom_shift_id={conflict.Taxcom.Id}; " +
                 $"frontol_shift_id={conflict.Frontol.Id}; taxcom_total_kopecks={conflict.Taxcom.TotalKopecks}; " +
