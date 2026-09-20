@@ -253,7 +253,7 @@ public sealed class CrossSourceShiftMatchingTests
         var day = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 6, location.Id));
         Assert.Equal(60160m, day.ShiftTotal);
         Assert.Equal(59460m, day.FiscalElectronic);
-        Assert.Equal("Taxcom", day.FiscalSources);
+        Assert.Equal("Такском", day.FiscalSources);
     }
 
     private static readonly DateOnly Day = new(2026, 6, 10);
