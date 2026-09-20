@@ -13,9 +13,20 @@ public static class DayOperationDetails
             SELECT o.occurred_at,o.source,o.kind,o.payment,o.amount_kopecks,o.register_display_name,o.fn,o.kkt_serial,o.registration_number,o.shift_number,
                    CASE WHEN o.location_id IS NULL THEN 'ККТ не привязана'
                         WHEN o.source_kind='Bank' THEN 'Банковская операция'
-                        WHEN o.source_kind='FiscalConflict' THEN 'Конфликт источников'
-                        WHEN EXISTS(SELECT 1 FROM canonical_fiscal_operations f WHERE f.id=o.id) THEN 'Учтено в кассе'
-                        ELSE 'Подтверждение / перекрыто сменой / конфликт — повторно не учтено' END,
+                        WHEN o.source='Frontol.Report' AND EXISTS(
+                            SELECT 1 FROM fiscal_source_conflicts c
+                            WHERE c.organization_id=o.organization_id AND c.location_id=o.location_id
+                              AND c.business_date=substr(o.occurred_at,1,10))
+                            THEN 'Расхождение с Такском — Frontol проверочный, не учтён'
+                        WHEN o.source='Frontol.Report' AND EXISTS(
+                            SELECT 1 FROM shift_source_links l
+                            JOIN shift_closures s ON s.id=l.observed_shift_id
+                            WHERE s.source=o.source AND o.external_id IN(s.external_id||':cash',s.external_id||':electronic'))
+                            THEN 'Совпало с Такском — Frontol проверочный, не учтён повторно'
+                        WHEN o.source='Frontol.Report' THEN 'Frontol без подтверждения ОФД — в итог не включён'
+                        WHEN EXISTS(SELECT 1 FROM canonical_fiscal_operations f WHERE f.id=o.id)
+                            THEN CASE WHEN o.source LIKE 'Taxcom.%' THEN 'Такском — учтено в кассе' ELSE 'Учтено в кассе' END
+                        ELSE 'Подтверждение / перекрыто сменой — повторно не учтено' END,
                    COALESCE(d.original_name,'')
             FROM operations o LEFT JOIN source_documents d ON d.id=o.document_id
             WHERE o.organization_id=$org AND (($loc IS NULL AND o.location_id IS NULL) OR o.location_id=$loc)
