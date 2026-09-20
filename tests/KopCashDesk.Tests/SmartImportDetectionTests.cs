@@ -90,6 +90,18 @@ public sealed class SmartImportDetectionTests
     }
 
     [Theory]
+    [InlineData("37446500", "Хризотил")]
+    [InlineData("37446501", "Хризотил")]
+    [InlineData("37446502", "Хризотил")]
+    [InlineData("37446495", "Кафе Сиеста")]
+    [InlineData("39887320", "Кафе Сиеста")]
+    [InlineData("39887319", "Кафе Сиеста")]
+    [InlineData("39974228", "Кафе Сиеста")]
+    [InlineData("37446428", "Лакомка")]
+    public void KopKnownTerminal_UsesFiscalReconciliationPoint(string terminal, string expected)
+        => Assert.Equal(expected, SmartSberAcquiringImporter.CanonicalPointNameForTerminal(terminal, "6603017238"));
+
+    [Theory]
     [InlineData("42526205", "Кулинария Аппетит")]
     [InlineData("34723825", "Столовая АТИ")]
     [InlineData("34773474", "Рефтинская ГРЭС 6 столовая")]
