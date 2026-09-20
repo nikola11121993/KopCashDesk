@@ -17,6 +17,7 @@ public enum SmartImportKind
     Sber,
     Taxcom,
     TaxcomFiscalDocuments,
+    FirstOfd,
     ClosedShifts,
     UbrdDaily,
     Frontol,
@@ -116,6 +117,16 @@ public static class SmartReportDetector
 
     private static SmartImportKind ClassifySeen(HashSet<string> seen, string normalizedFileName)
     {
+        var firstOfdCore = new[]
+        {
+            "инн", "наименование ккт", "адрес места установки ккт", "смена", "закрыта",
+            "сумма выручки", "сумма выручки наличными", "сумма выручки безналичными"
+        };
+        if (firstOfdCore.All(seen.Contains) &&
+            (seen.Contains("отчет по сменам с налогами") ||
+             normalizedFileName.Contains("отчет по сменам с налогами", StringComparison.Ordinal)))
+            return SmartImportKind.FirstOfd;
+
         if (Has(seen, "торговая точка", "номер смены", "дата закрытия смены", "получено наличными", "получено безналичными", "номер фн") &&
             (seen.Contains("наименование ккт") || seen.Contains("заводской номер ккт")))
             return SmartImportKind.ClosedShifts;
