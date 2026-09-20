@@ -62,7 +62,7 @@ public sealed class SmartUnifiedImportWindow : Window
         _fallbackOrganizationId = fallbackOrganizationId;
         _afterImport = afterImport;
 
-        Title = "Импорт файлов — Сбер, кассы, Такском, УБРиР, Frontol, CRPT";
+        Title = "Импорт файлов — Сбер, ОФД, кассы, УБРиР, Frontol, CRPT";
         Width = 1180;
         Height = 760;
         MinWidth = 940;
@@ -83,7 +83,7 @@ public sealed class SmartUnifiedImportWindow : Window
         heading.Children.Add(new TextBlock { Text = "Один импорт для всех отчётов", FontSize = 24, FontWeight = FontWeights.SemiBold });
         heading.Children.Add(new TextBlock
         {
-            Text = "Программа определяет полные и сокращённые отчёты Сбер, ZIP регулярного эквайринга, Такском, альтернативные «Закрытые смены», УБРиР, Frontol и CRPT. Перекрывающиеся банковские отчёты не удваивают операции.",
+            Text = "Программа определяет отчёты Сбер, Такском, Первый ОФД «Отчет по сменам с налогами», альтернативные «Закрытые смены», УБРиР, Frontol и CRPT. Перекрывающиеся отчёты не должны удваивать операции.",
             Margin = new Thickness(0, 6, 0, 0), Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap
         });
         root.Children.Add(heading);
@@ -267,6 +267,7 @@ public sealed class SmartUnifiedImportWindow : Window
         if (files.Any(x => x.Kind == SmartImportKind.ClosedShifts)) stages++;
         if (files.Any(x => x.Kind == SmartImportKind.Taxcom)) stages++;
         if (files.Any(x => x.Kind == SmartImportKind.TaxcomFiscalDocuments)) stages++;
+        if (files.Any(x => x.Kind == SmartImportKind.FirstOfd)) stages++;
         if (files.Any(x => x.Kind == SmartImportKind.Crpt)) stages++;
         stages += files.Where(x => x.Kind == SmartImportKind.Frontol)
             .Select(x => (x.OrganizationId, x.LocationId)).Distinct().Count();
@@ -327,6 +328,14 @@ public sealed class SmartUnifiedImportWindow : Window
                     result.Add("ТАКСКОМ — ФИСКАЛЬНЫЕ ДОКУМЕНТЫ\n" + summary.ToDisplayText());
                 }
 
+                var firstOfd = files.Where(x => x.Kind == SmartImportKind.FirstOfd).Select(x => x.Path).ToArray();
+                if (firstOfd.Length > 0)
+                {
+                    Report($"Первый ОФД — смены, {firstOfd.Length} файл(а/ов)");
+                    var summary = new FirstOfdShiftReportImporter(_database).ImportFiles(firstOfd);
+                    result.Add("ПЕРВЫЙ ОФД — СМЕНЫ\n" + summary.ToDisplayText());
+                }
+
                 var crpt = files.Where(x => x.Kind == SmartImportKind.Crpt).Select(x => x.Path).ToArray();
                 if (crpt.Length > 0)
                 {
@@ -346,7 +355,7 @@ public sealed class SmartUnifiedImportWindow : Window
                 SmartKnownRules.PrepareCleanDatabase(_database);
                 Report("проверяю совпадения источников и завершаю импорт");
                 var matching = _database.RebuildCrossSourceShiftMatches();
-                result.Add($"ПРОВЕРКА ИСТОЧНИКОВ\nСовпало Такском + Frontol: {matching.MatchedPairs}\nРасхождений Такском ↔ Frontol: {matching.Conflicts}\nПри расхождении в итог кассы берётся Такском; Frontol остаётся проверочным источником.");
+                result.Add($"ПРОВЕРКА ИСТОЧНИКОВ\nСовпало ОФД + Frontol: {matching.MatchedPairs}\nРасхождений ОФД ↔ Frontol: {matching.Conflicts}\nОфициальная сумма берётся из ОФД (Такском / Первый ОФД); Frontol остаётся проверочным источником.");
                 return string.Join("\n\n------------------------------\n\n", result);
             });
 
@@ -403,6 +412,7 @@ public sealed class SmartUnifiedImportWindow : Window
         SmartImportKind.Sber => "Сбер / эквайринг",
         SmartImportKind.Taxcom => "Такском — смены",
         SmartImportKind.TaxcomFiscalDocuments => "Такском — чеки",
+        SmartImportKind.FirstOfd => "Первый ОФД — смены",
         SmartImportKind.ClosedShifts => "Закрытые смены",
         SmartImportKind.UbrdDaily => "УБРиР — по дням",
         SmartImportKind.Frontol => "Frontol",
