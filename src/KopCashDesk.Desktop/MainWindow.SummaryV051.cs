@@ -11,7 +11,7 @@ public partial class MainWindow
     private UIElement RenderSummaryV051()
     {
         PageTitle.Text = "Свод по точкам";
-        PageSubtitle.Text = "Такском — основной кассовый источник. Frontol используется только для проверки и второй раз в итог не складывается.";
+        PageSubtitle.Text = "ОФД — основной кассовый источник (Такском / Первый ОФД). Frontol используется только для проверки и второй раз в итог не складывается.";
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -275,8 +275,8 @@ public partial class MainWindow
                     var lastClosed = g.Where(x => x.LastClosedAt is not null).Select(x => x.LastClosedAt).Max();
                     var status = complete
                         ? SummaryStatus(bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), difference, g.Any(x => x.CashFromSber)) +
-                          (hasFrontolMismatch ? " — Расхождение с Frontol, в итог взят Такском" : "")
-                        : "Неполные данные" + (hasFrontolMismatch ? " — Расхождение с Frontol, в итог взят Такском" : "");
+                          (hasFrontolMismatch ? " — Расхождение с Frontol, в итог взят ОФД" : "")
+                        : "Неполные данные" + (hasFrontolMismatch ? " — Расхождение с Frontol, в итог взят ОФД" : "");
                     return new MonthSummaryRow(g.Key.Year, g.Key.Month, g.Key.OrganizationId, g.Key.LocationId, g.Key.Organization, g.Key.Point,
                         bank, cash, shiftTotal, g.Sum(x => x.ShiftCount), lastClosed, difference, status);
                 })
@@ -289,7 +289,7 @@ public partial class MainWindow
             var incompleteDays = dayRows.Count(x => (x.Sber is null) != (x.CashElectronic is null));
             var frontolMismatchDays = dayRows.Count(x => x.Status.Contains("Расхождение с Frontol", StringComparison.OrdinalIgnoreCase));
             var manualDays = manualCash.Keys.Concat(manualTerminal.Keys).Distinct().Count();
-            totals.Text = $"Терминал за период: {MoneyText(bankTotal)}     •     Касса безнал (Такском): {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
+            totals.Text = $"Терминал за период: {MoneyText(bankTotal)}     •     Касса безнал (ОФД): {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
                           (manualDays > 0 ? $"     •     Ручных дней: {manualDays}" : "") +
                           (incompleteDays > 0 ? $"     •     Неполных дней: {incompleteDays}" : "") +
                           (frontolMismatchDays > 0 ? $"     •     Расхождений Такском ↔ Frontol: {frontolMismatchDays}" : "");
@@ -323,7 +323,7 @@ public partial class MainWindow
         {
             status = SummaryStatus(row.BankElectronic, cash, row.ShiftTotal, row.ShiftCount, difference, copied);
             if (row.HasSourceConflict)
-                status += " — Расхождение с Frontol, в итог взят Такском";
+                status += " — Расхождение с Frontol, в итог взят ОФД";
             status += SourceSuffix(row.FiscalSources);
         }
 
