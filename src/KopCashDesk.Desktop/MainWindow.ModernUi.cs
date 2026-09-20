@@ -5,7 +5,7 @@ namespace KopCashDesk.Desktop;
 
 public partial class MainWindow
 {
-    private const string SummaryHint = "Суммы терминала и кассы по дням. «Конфликт Taxcom ↔ Frontol» означает: одна и та же смена пришла из двух кассовых источников с разными суммами. Двойной клик по строке покажет обе суммы.";
+    private const string SummaryHint = "Такском — основной кассовый источник. Frontol используется только для проверки. Если суммы различаются, в итог всё равно берётся Такском, а строка помечается «Расхождение с Frontol».";
     private const string ReconciliationHint = "Накопительная сверка: показывает, чем более поздняя сумма кассы закрыла более раннюю сумму терминала. Двойной клик по дню — подробное объяснение погашения.";
 
     private void ModernMainWindow_Loaded(object sender, RoutedEventArgs e)
