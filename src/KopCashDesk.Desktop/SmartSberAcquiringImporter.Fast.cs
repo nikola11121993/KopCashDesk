@@ -93,6 +93,8 @@ public sealed class SmartSberAcquiringImporter
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["37446495"] = "Хризотил",
+            ["37446498"] = "Хризотил",
+            ["37446499"] = "Хризотил",
             ["37446500"] = "Хризотил",
             ["37446501"] = "Хризотил",
             ["37446502"] = "Хризотил",
@@ -120,10 +122,11 @@ public sealed class SmartSberAcquiringImporter
         var tid = DigitsOnly(terminalId);
         var taxId = DigitsOnly(organizationTaxId ?? string.Empty);
 
-        // Temporary confirmed rule: TID 37446495 is physically in «Хризотил»,
-        // but its card sales are rung on the Siesta fiscal register
-        // KKT 0014943 / RNM 0001113145061553.
-        if (taxId == KnownOrganizations.KopTaxId && tid == "37446495")
+        // Temporary confirmed rule: the physical Hrizotil terminal 37446495 and its
+        // linked P_QR/SBP channels 37446498/37446499 are rung on the Siesta fiscal
+        // register KKT 0014943 / RNM 0001113145061553.
+        if (taxId == KnownOrganizations.KopTaxId &&
+            (tid == "37446495" || tid == "37446498" || tid == "37446499"))
             return "Кафе Сиеста";
 
         return CanonicalPointNameForTerminal(tid, taxId);
