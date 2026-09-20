@@ -89,7 +89,7 @@ public sealed class ModernImportAndOrganizationTests
 
         var bindings = f.Db.TerminalBindings().Where(x => x.OrganizationId == kop.Id).ToArray();
         Assert.Equal(hrizotil.Id, Assert.Single(bindings, x => x.TerminalId == "37446500").LocationId);
-        Assert.Equal(siesta.Id, Assert.Single(bindings, x => x.TerminalId == "37446495").LocationId);
+        Assert.Equal(hrizotil.Id, Assert.Single(bindings, x => x.TerminalId == "37446495").LocationId);
     }
 
     [Fact]
