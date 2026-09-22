@@ -81,8 +81,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Version is missing in KopCashDesk.Desktop.csproj' }
           $tag = "v$version-preview"
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $title = "КОП Кассы $version — дневная и месячная сверка"
-          $notes = "Версия $version. В сверке касса ↔ терминал добавлены отдельные представления по дням и по месяцам, крупный накопительный остаток «надо пробить / перебито / сошлось» за всё время и экспорт Excel с тремя листами: Итоги, По дням, По месяцам. Commit: $env:GITHUB_SHA"
+          $title = "КОП Кассы $version — сверка только за текущий год"
+          $notes = "Версия $version. Накопительная сверка касса ↔ терминал теперь считается только внутри выбранного года и сбрасывается 1 января. Данные кассы прошлых лет больше не влияют на текущий год. По дням, по месяцам и Excel также используют годовой диапазон. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $asset --title $title --notes $notes --prerelease --target $env:GITHUB_SHA
