@@ -70,19 +70,24 @@ public partial class MainWindow
     private UIElement RenderReconciliation()
     {
         PageTitle.Text = "Сверка касса ↔ терминал";
-        PageSubtitle.Text = "По дням, по месяцам и накопительно внутри выбранного года. Каждый год начинается с нуля.";
+        PageSubtitle.Text = "Главный год сверки — 2026. Данные прошлых лет полностью исключены из расчёта.";
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        var all = _db.ReconciliationDays(SelectedOrganizationId);
-        var years = all.Select(x => x.Date.Year).Distinct().OrderByDescending(x => x).ToList();
-        if (years.Count == 0) years.Add(DateTime.Today.Year);
-
-        var defaultYear = years.Contains(DateTime.Today.Year) ? DateTime.Today.Year : years[0];
-        var yearBox = new ComboBox { Width = 105, ItemsSource = years, SelectedItem = defaultYear, Margin = new Thickness(0, 0, 12, 6) };
+        const int primaryYear = 2026;
+        var years = new[] { primaryYear };
+        var yearBox = new ComboBox
+        {
+            Width = 105,
+            ItemsSource = years,
+            SelectedItem = primaryYear,
+            IsEnabled = false,
+            Margin = new Thickness(0, 0, 12, 6),
+            ToolTip = "Сверка фиксирована на 2026 год. Прошлые годы не участвуют в расчёте."
+        };
         var culture = CultureInfo.GetCultureInfo("ru-RU");
         var monthOptions = new List<ReconciliationMonthOption> { new(null, "Все месяцы") };
         for (var month = 1; month <= 12; month++)
@@ -265,8 +270,10 @@ public partial class MainWindow
             // Старые кассовые данные 2023–2025 не должны влиять на 2026 год.
             // Конфликтный день не обнуляем: ReconciliationDays сохраняет сумму Frontol
             // и отдельно помечает такой день как требующий проверки.
-            var yearDays = _db.ReconciliationDays(SelectedOrganizationId, locationId: locationId)
-                .Where(x => x.Date.Year == year)
+            var yearDays = _db.ReconciliationDays(
+                    SelectedOrganizationId,
+                    year: year,
+                    locationId: locationId)
                 .ToArray();
 
             var accumulatedByDay = new Dictionary<(Guid LocationId, DateOnly Date), decimal>();
