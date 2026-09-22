@@ -12,7 +12,7 @@ public partial class MainWindow
     private sealed record ReconciliationLocationOption(Guid? Id, string Name);
     private sealed record ReconciliationMonthOption(int? Number, string Name);
 
-    private sealed record ReconciliationRow(ReconciliationDay Day)
+    private sealed record ReconciliationRow(ReconciliationDay Day, decimal AccumulatedNeedToPunch)
     {
         public string Date => Day.Date.ToString("dd.MM.yyyy", CultureInfo.GetCultureInfo("ru-RU"));
         public string Point => Day.Location;
@@ -23,6 +23,11 @@ public partial class MainWindow
         public decimal ClosedLater => Day.ClosedLater;
         public decimal DayRemaining => Day.DayRemaining;
         public decimal TotalRemaining => Day.CumulativeOutstanding;
+        public string AccumulatedAction => AccumulatedNeedToPunch > 0m
+            ? $"Пробить {AccumulatedNeedToPunch:N2} ₽"
+            : AccumulatedNeedToPunch < 0m
+                ? $"Перебито {Math.Abs(AccumulatedNeedToPunch):N2} ₽"
+                : "Сошлось";
         public string Status => Day.Status;
         public string ClosedAt => Day.LastShiftClosedAt?.LocalDateTime.ToString("dd.MM.yyyy HH:mm") ?? "";
         public string Shift => Day.ShiftNumbers;
@@ -95,6 +100,7 @@ public partial class MainWindow
         grid.Columns.Add(ReconciliationMoneyColumn("Пробито позже", "ClosedLater", 115));
         grid.Columns.Add(ReconciliationMoneyColumn("Остаток за день", "DayRemaining", 120));
         grid.Columns.Add(ReconciliationMoneyColumn("Общий остаток", "TotalRemaining", 120));
+        grid.Columns.Add(ReconciliationTextColumn("Накопительно", "AccumulatedAction", 170));
         grid.Columns.Add(ReconciliationTextColumn("Статус", "Status", 210));
         grid.Columns.Add(ReconciliationTextColumn("Закрытие смены", "ClosedAt", 145));
         grid.Columns.Add(ReconciliationTextColumn("№ смены", "Shift", 95));
@@ -109,7 +115,10 @@ public partial class MainWindow
             var conflictKeys = _db.FiscalSourceConflicts()
                 .Select(x => (x.OrganizationId, x.LocationId, x.BusinessDate))
                 .ToHashSet();
-            var days = _db.ReconciliationDays(SelectedOrganizationId, year, month, locationId)
+
+            // Баланс считаем по всей истории выбранной точки.
+            // Год и месяц меняют только видимые строки и не обнуляют старые ошибки.
+            var allTimeDays = _db.ReconciliationDays(SelectedOrganizationId, locationId: locationId)
                 .Select(x => conflictKeys.Contains((x.OrganizationId, x.LocationId, x.Date))
                     ? x with
                     {
@@ -119,7 +128,24 @@ public partial class MainWindow
                     }
                     : x)
                 .ToArray();
-            var rows = days.Select(x => new ReconciliationRow(x)).ToArray();
+
+            var accumulatedByDay = new Dictionary<(Guid LocationId, DateOnly Date), decimal>();
+            foreach (var pointDays in allTimeDays.GroupBy(x => x.LocationId))
+            {
+                var accumulated = 0m;
+                foreach (var day in pointDays.OrderBy(x => x.Date))
+                {
+                    accumulated += (day.BankElectronic ?? 0m) - (day.CashElectronic ?? 0m);
+                    accumulatedByDay[(day.LocationId, day.Date)] = Money.Normalize(accumulated);
+                }
+            }
+
+            var days = allTimeDays
+                .Where(x => x.Date.Year == year && (month is null || x.Date.Month == month))
+                .ToArray();
+            var rows = days
+                .Select(x => new ReconciliationRow(x, accumulatedByDay.GetValueOrDefault((x.LocationId, x.Date))))
+                .ToArray();
             grid.ItemsSource = rows;
 
             var terminalKnown = days.Where(x => x.BankElectronic is not null).Select(x => x.BankElectronic!.Value).ToArray();
@@ -129,10 +155,26 @@ public partial class MainWindow
             var missingCash = days.Count(x => x.HasBankData && !x.HasCashData && x.DayRemaining > 0m);
             var review = days.Count(x => x.RequiresReview);
 
+            var allTimeTerminal = allTimeDays.Sum(x => x.BankElectronic ?? 0m);
+            var allTimeCash = allTimeDays.Sum(x => x.CashElectronic ?? 0m);
+            var needToPunch = Money.Normalize(allTimeTerminal - allTimeCash);
+            var allTimeReview = allTimeDays.Count(x => x.RequiresReview);
+            var action = needToPunch > 0m
+                ? $"НАДО ПРОБИТЬ: {needToPunch:N2} ₽"
+                : needToPunch < 0m
+                    ? $"ПЕРЕБИТО: {Math.Abs(needToPunch):N2} ₽"
+                    : "СОШЛОСЬ: 0,00 ₽";
+            var accumulatedHeader = locationId is null
+                ? $"ВСЕ ТОЧКИ — общий баланс: {needToPunch:N2} ₽; точную сумму для каждой точки см. в колонке «Накопительно»"
+                : $"НАКОПИТЕЛЬНО ЗА ВСЁ ВРЕМЯ — {action}";
+
             totals.Text =
-                $"Терминалы: {(terminalKnown.Length == 0 ? "нет данных" : terminalKnown.Sum().ToString("N2") + " ₽")}     •     " +
+                $"{accumulatedHeader}     •     Терминалы: {allTimeTerminal:N2} ₽     •     Касса: {allTimeCash:N2} ₽" +
+                (allTimeReview > 0 ? $"     •     На проверке: {allTimeReview}" : "") +
+                Environment.NewLine +
+                $"Выбранный период — Терминалы: {(terminalKnown.Length == 0 ? "нет данных" : terminalKnown.Sum().ToString("N2") + " ₽")}     •     " +
                 $"Касса: {(cashKnown.Length == 0 ? "нет данных" : cashKnown.Sum().ToString("N2") + " ₽")}     •     " +
-                $"Текущий непробитый остаток: {remaining:N2} ₽     •     " +
+                $"FIFO-остаток: {remaining:N2} ₽     •     " +
                 $"Дней без кассовых данных: {missingCash}     •     Требует проверки: {review}";
         }
 
