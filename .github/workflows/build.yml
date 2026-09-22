@@ -81,8 +81,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Version is missing in KopCashDesk.Desktop.csproj' }
           $tag = "v$version-preview"
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $title = "КОП Кассы $version — физические смены без задвоения"
-          $notes = "Версия $version. Taxcom и Frontol теперь сохраняются как отдельные исходные наблюдения, но безопасно совпавшая физическая смена учитывается в финансах и FIFO один раз. Совпадение требует одинаковые организацию, точку, дату, total/cash/electronic и разницу времени не более 5 минут. Несовпадающие суммы помечаются конфликтом и не выбираются молча. Универсальный импорт назначает каждый Frontol report.txt отдельной точке. Commit: $env:GITHUB_SHA"
+          $title = "КОП Кассы $version — дневная и месячная сверка"
+          $notes = "Версия $version. В сверке касса ↔ терминал добавлены отдельные представления по дням и по месяцам, крупный накопительный остаток «надо пробить / перебито / сошлось» за всё время и экспорт Excel с тремя листами: Итоги, По дням, По месяцам. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $asset --title $title --notes $notes --prerelease --target $env:GITHUB_SHA
