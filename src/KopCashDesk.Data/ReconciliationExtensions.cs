@@ -112,6 +112,7 @@ public static class ReconciliationExtensions
 
         var bankDays = ReadBankDays(db, transaction, organization.Id, location.Id);
         var fiscalEvents = ReadFiscalEvents(db, transaction, organization.Id, location.Id);
+        var frontolConflictFallbackEvents = ReadFrontolConflictFallbackEvents(db, transaction, organization.Id, location.Id);
         var manualEvents = ReadManualEvents(db, transaction, organization.Id, location.Id);
         var shifts = ReadShiftMeta(db, transaction, organization.Id, location.Id);
 
@@ -119,8 +120,14 @@ public static class ReconciliationExtensions
 
         var conflicts = database.CrossSourceConflictDates(organization.Id, location.Id);
         var manualDates = manualEvents.Select(x => x.Date).ToHashSet();
-        var effectiveCashEvents = fiscalEvents.Where(x => !manualDates.Contains(x.Date))
-            .Concat(manualEvents).Where(x => !conflicts.Contains(x.Date))
+
+        // На конфликтной дате canonical_fiscal_operations намеренно не выбирает ни один источник.
+        // Для итоговых сумм кассы это нельзя превращать в ноль: используем прямой Frontol report.txt
+        // как резервный источник, но сам день всё равно оставляем "требует проверки".
+        var effectiveCashEvents = fiscalEvents
+            .Concat(frontolConflictFallbackEvents.Where(x => conflicts.Contains(x.Date)))
+            .Where(x => !manualDates.Contains(x.Date))
+            .Concat(manualEvents)
             .OrderBy(x => x.Date)
             .ThenBy(x => x.OccurredAt, StringComparer.Ordinal)
             .ThenBy(x => x.Source, StringComparer.Ordinal)
@@ -445,6 +452,39 @@ public static class ReconciliationExtensions
         var result = new List<CashEvent>();
         while (reader.Read())
             result.Add(new(ParseDate(reader.GetString(0)), reader.GetString(1), reader.GetString(2), reader.GetInt64(3), reader.GetString(4)));
+        return result;
+    }
+
+    private static List<CashEvent> ReadFrontolConflictFallbackEvents(
+        SqliteConnection db,
+        SqliteTransaction tx,
+        Guid organizationId,
+        Guid locationId)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            SELECT substr(occurred_at,1,10),source,external_id,amount_kopecks,occurred_at
+            FROM operations
+            WHERE organization_id=$org
+              AND location_id=$loc
+              AND source='Frontol.Report'
+              AND source_kind='FiscalConflict'
+              AND payment='Electronic'
+            ORDER BY occurred_at,external_id
+            """;
+        command.Parameters.AddWithValue("$org", organizationId.ToString());
+        command.Parameters.AddWithValue("$loc", locationId.ToString());
+        using var reader = command.ExecuteReader();
+
+        var result = new List<CashEvent>();
+        while (reader.Read())
+            result.Add(new(
+                ParseDate(reader.GetString(0)),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt64(3),
+                reader.GetString(4)));
         return result;
     }
 
