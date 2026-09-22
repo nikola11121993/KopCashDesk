@@ -193,6 +193,22 @@ public sealed class CrossSourceShiftMatchingTests
     }
 
     [Fact]
+    public void Conflict_ReconciliationUsesFrontolAmount_ButKeepsReviewFlag()
+    {
+        var (db, org, location) = CreateDb();
+        AddShift(db, org, location, Taxcom, "tax", At(14, 57, 0), 75952m, 0m, 75952m, "fn", 1);
+        AddShift(db, org, location, Frontol, "front", At(14, 58, 0), 96101m, 0m, 96101m, "", 1);
+        AddBank(db, org, location, 96101m);
+
+        var day = Assert.Single(db.ReconciliationDays(org.Id, 2026, 6, location.Id));
+
+        Assert.Equal(96101m, day.CashElectronic);
+        Assert.Equal(96101m, day.BankElectronic);
+        Assert.True(day.RequiresReview);
+        Assert.Equal("Конфликт источников — требуется проверка", day.Status);
+    }
+
+    [Fact]
     public void FrontolOnly_HistoryRemainsFinancial()
     {
         var (db, org, location) = CreateDb();
