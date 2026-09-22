@@ -261,22 +261,12 @@ public partial class MainWindow
             var month = (monthBox.SelectedItem as ReconciliationMonthOption)?.Number;
             var locationId = (locationBox.SelectedItem as ReconciliationLocationOption)?.Id;
 
-            var conflictKeys = _db.FiscalSourceConflicts()
-                .Select(x => (x.OrganizationId, x.LocationId, x.BusinessDate))
-                .ToHashSet();
-
             // Сверка и накопительный остаток считаются ТОЛЬКО внутри выбранного года.
             // Старые кассовые данные 2023–2025 не должны влиять на 2026 год.
+            // Конфликтный день не обнуляем: ReconciliationDays сохраняет сумму Frontol
+            // и отдельно помечает такой день как требующий проверки.
             var yearDays = _db.ReconciliationDays(SelectedOrganizationId, locationId: locationId)
                 .Where(x => x.Date.Year == year)
-                .Select(x => conflictKeys.Contains((x.OrganizationId, x.LocationId, x.Date))
-                    ? x with
-                    {
-                        CashElectronic = null,
-                        RequiresReview = true,
-                        Status = "Конфликт кассовых источников — требуется проверка"
-                    }
-                    : x)
                 .ToArray();
 
             var accumulatedByDay = new Dictionary<(Guid LocationId, DateOnly Date), decimal>();
