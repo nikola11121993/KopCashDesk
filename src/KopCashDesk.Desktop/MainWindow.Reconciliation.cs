@@ -27,6 +27,7 @@ public partial class MainWindow
         public decimal ClosedLater => Day.ClosedLater;
         public decimal DayRemaining => Day.DayRemaining;
         public decimal TotalRemaining => Day.CumulativeOutstanding;
+        public decimal DayDifference => Money.Normalize((Day.BankElectronic ?? 0m) - (Day.CashElectronic ?? 0m));
         public decimal AccumulatedBalance => AccumulatedNeedToPunch;
         public string AccumulatedAction => AccumulatedNeedToPunch > 0m
             ? $"Пробить {AccumulatedNeedToPunch:N2} ₽"
@@ -36,6 +37,25 @@ public partial class MainWindow
         public string Status => Day.Status;
         public string ClosedAt => Day.LastShiftClosedAt?.LocalDateTime.ToString("dd.MM.yyyy HH:mm") ?? "";
         public string Shift => Day.ShiftNumbers;
+    }
+
+    private sealed record ReconciliationMonthRow(
+        int Year,
+        int Month,
+        Guid LocationId,
+        string Point,
+        decimal Terminal,
+        decimal Cash,
+        decimal Difference,
+        decimal AccumulatedBalance,
+        int ReviewDays)
+    {
+        public string Period => $"{Month:00}.{Year}";
+        public string Action => AccumulatedBalance > 0m
+            ? $"Пробить {AccumulatedBalance:N2} ₽"
+            : AccumulatedBalance < 0m
+                ? $"Перебито {Math.Abs(AccumulatedBalance):N2} ₽"
+                : "Сошлось";
     }
 
     private void Reconciliation_Click(object sender, RoutedEventArgs e)
@@ -50,7 +70,7 @@ public partial class MainWindow
     private UIElement RenderReconciliation()
     {
         PageTitle.Text = "Сверка касса ↔ терминал";
-        PageSubtitle.Text = "Накопительная FIFO-сверка: поздняя касса закрывает самые старые непробитые терминальные суммы";
+        PageSubtitle.Text = "По дням, по месяцам и накопительно за всё время. Старые ошибки не обнуляются новым месяцем.";
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -61,39 +81,66 @@ public partial class MainWindow
         var years = all.Select(x => x.Date.Year).Distinct().OrderByDescending(x => x).ToList();
         if (years.Count == 0) years.Add(DateTime.Today.Year);
 
-        var yearBox = new ComboBox { Width = 105, ItemsSource = years, SelectedItem = years[0], Margin = new Thickness(0, 0, 12, 0) };
+        var yearBox = new ComboBox { Width = 105, ItemsSource = years, SelectedItem = years[0], Margin = new Thickness(0, 0, 12, 6) };
         var culture = CultureInfo.GetCultureInfo("ru-RU");
         var monthOptions = new List<ReconciliationMonthOption> { new(null, "Все месяцы") };
-        for (var month = 1; month <= 12; month++) monthOptions.Add(new(month, culture.DateTimeFormat.GetMonthName(month)));
-        var monthBox = new ComboBox { Width = 155, ItemsSource = monthOptions, DisplayMemberPath = "Name", SelectedIndex = 0, Margin = new Thickness(0, 0, 12, 0) };
+        for (var month = 1; month <= 12; month++)
+            monthOptions.Add(new(month, culture.DateTimeFormat.GetMonthName(month)));
+        var monthBox = new ComboBox { Width = 155, ItemsSource = monthOptions, DisplayMemberPath = "Name", SelectedIndex = 0, Margin = new Thickness(0, 0, 12, 6) };
 
         var locationOptions = new List<ReconciliationLocationOption> { new(null, "Все точки") };
         locationOptions.AddRange(_locations
             .Where(x => SelectedOrganizationId is null || x.OrganizationId == SelectedOrganizationId)
             .OrderBy(x => x.Name)
             .Select(x => new ReconciliationLocationOption(x.Id, x.Name)));
-        var locationBox = new ComboBox { Width = 285, ItemsSource = locationOptions, DisplayMemberPath = "Name", SelectedIndex = 0, Margin = new Thickness(0, 0, 12, 0) };
+        var locationBox = new ComboBox { Width = 285, ItemsSource = locationOptions, DisplayMemberPath = "Name", SelectedIndex = 0, Margin = new Thickness(0, 0, 12, 6) };
 
-        var filters = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
-        filters.Children.Add(new TextBlock { Text = "Год:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0) });
-        filters.Children.Add(yearBox);
-        filters.Children.Add(new TextBlock { Text = "Месяц:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0) });
-        filters.Children.Add(monthBox);
-        filters.Children.Add(new TextBlock { Text = "Точка:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0) });
-        filters.Children.Add(locationBox);
         var exportButton = new Button
         {
-            Content = "Выгрузить Excel",
-            Padding = new Thickness(12, 5, 12, 5)
+            Content = "ЭКСПОРТ В EXCEL — ДНИ + МЕСЯЦЫ",
+            MinWidth = 245,
+            Padding = new Thickness(14, 7, 14, 7),
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(8, 0, 0, 6),
+            ToolTip = "Один Excel-файл: Итоги, По дням и По месяцам"
         };
+
+        var filters = new WrapPanel { Margin = new Thickness(0, 0, 0, 10) };
+        filters.Children.Add(new TextBlock { Text = "Год:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 6) });
+        filters.Children.Add(yearBox);
+        filters.Children.Add(new TextBlock { Text = "Месяц:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 6) });
+        filters.Children.Add(monthBox);
+        filters.Children.Add(new TextBlock { Text = "Точка:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 6) });
+        filters.Children.Add(locationBox);
         filters.Children.Add(exportButton);
         root.Children.Add(filters);
 
-        var totals = new TextBlock { FontSize = 15, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 14), TextWrapping = TextWrapping.Wrap };
-        Grid.SetRow(totals, 1);
-        root.Children.Add(totals);
+        var accumulatedTitle = new TextBlock
+        {
+            FontSize = 22,
+            FontWeight = FontWeights.Bold,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var accumulatedDetails = new TextBlock
+        {
+            FontSize = 14,
+            Margin = new Thickness(0, 5, 0, 0),
+            TextWrapping = TextWrapping.Wrap
+        };
+        var totalsPanel = new StackPanel();
+        totalsPanel.Children.Add(accumulatedTitle);
+        totalsPanel.Children.Add(accumulatedDetails);
+        var totalsCard = new System.Windows.Controls.Border
+        {
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(14, 10, 14, 10),
+            Margin = new Thickness(0, 0, 0, 12),
+            Child = totalsPanel
+        };
+        Grid.SetRow(totalsCard, 1);
+        root.Children.Add(totalsCard);
 
-        var grid = new DataGrid
+        var dailyGrid = new DataGrid
         {
             IsReadOnly = true,
             AutoGenerateColumns = false,
@@ -102,23 +149,44 @@ public partial class MainWindow
             SelectionMode = DataGridSelectionMode.Single,
             FrozenColumnCount = 2
         };
-        grid.Columns.Add(ReconciliationTextColumn("Дата", "Date", 100));
-        grid.Columns.Add(ReconciliationTextColumn("Точка", "Point", new DataGridLength(2, DataGridLengthUnitType.Star)));
-        grid.Columns.Add(ReconciliationMoneyColumn("Терминалы", "Terminal", 110));
-        grid.Columns.Add(ReconciliationMoneyColumn("Касса безнал", "Cash", 115));
-        grid.Columns.Add(ReconciliationMoneyColumn("Непробито ранее", "Prior", 125));
-        grid.Columns.Add(ReconciliationMoneyColumn("Погашено кассой", "CashApplied", 125));
-        grid.Columns.Add(ReconciliationMoneyColumn("Пробито позже", "ClosedLater", 115));
-        grid.Columns.Add(ReconciliationMoneyColumn("Остаток за день", "DayRemaining", 120));
-        grid.Columns.Add(ReconciliationMoneyColumn("Общий остаток", "TotalRemaining", 120));
-        grid.Columns.Add(ReconciliationTextColumn("Накопительно", "AccumulatedAction", 170));
-        grid.Columns.Add(ReconciliationTextColumn("Статус", "Status", 210));
-        grid.Columns.Add(ReconciliationTextColumn("Закрытие смены", "ClosedAt", 145));
-        grid.Columns.Add(ReconciliationTextColumn("№ смены", "Shift", 95));
-        Grid.SetRow(grid, 2);
-        root.Children.Add(grid);
+        dailyGrid.Columns.Add(ReconciliationTextColumn("Дата", "Date", 100));
+        dailyGrid.Columns.Add(ReconciliationTextColumn("Точка", "Point", new DataGridLength(2, DataGridLengthUnitType.Star)));
+        dailyGrid.Columns.Add(ReconciliationMoneyColumn("Терминалы", "Terminal", 110));
+        dailyGrid.Columns.Add(ReconciliationMoneyColumn("Касса безнал", "Cash", 115));
+        dailyGrid.Columns.Add(ReconciliationMoneyColumn("Разница за день", "DayDifference", 125));
+        dailyGrid.Columns.Add(ReconciliationMoneyColumn("Накопительно недопробито", "AccumulatedBalance", 165));
+        dailyGrid.Columns.Add(ReconciliationTextColumn("Что делать", "AccumulatedAction", 170));
+        dailyGrid.Columns.Add(ReconciliationMoneyColumn("FIFO остаток", "TotalRemaining", 115));
+        dailyGrid.Columns.Add(ReconciliationTextColumn("Статус", "Status", 220));
+        dailyGrid.Columns.Add(ReconciliationTextColumn("Закрытие смены", "ClosedAt", 145));
+        dailyGrid.Columns.Add(ReconciliationTextColumn("№ смены", "Shift", 95));
 
-        ReconciliationRow[] currentRows = [];
+        var monthlyGrid = new DataGrid
+        {
+            IsReadOnly = true,
+            AutoGenerateColumns = false,
+            CanUserAddRows = false,
+            CanUserDeleteRows = false,
+            SelectionMode = DataGridSelectionMode.Single,
+            FrozenColumnCount = 2
+        };
+        monthlyGrid.Columns.Add(ReconciliationTextColumn("Месяц", "Period", 95));
+        monthlyGrid.Columns.Add(ReconciliationTextColumn("Точка", "Point", new DataGridLength(2, DataGridLengthUnitType.Star)));
+        monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Терминалы", "Terminal", 120));
+        monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Касса безнал", "Cash", 120));
+        monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Разница месяца", "Difference", 130));
+        monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Накопительно недопробито", "AccumulatedBalance", 170));
+        monthlyGrid.Columns.Add(ReconciliationTextColumn("Что делать", "Action", 175));
+        monthlyGrid.Columns.Add(ReconciliationTextColumn("Дней на проверке", "ReviewDays", 125));
+
+        var tabs = new TabControl();
+        tabs.Items.Add(new TabItem { Header = "По дням", Content = dailyGrid });
+        tabs.Items.Add(new TabItem { Header = "По месяцам", Content = monthlyGrid });
+        Grid.SetRow(tabs, 2);
+        root.Children.Add(tabs);
+
+        ReconciliationRow[] currentDailyRows = [];
+        ReconciliationMonthRow[] currentMonthlyRows = [];
         ReconciliationDay[] currentAllTimeDays = [];
 
         void RefreshRows()
@@ -126,12 +194,12 @@ public partial class MainWindow
             if (yearBox.SelectedItem is not int year) return;
             var month = (monthBox.SelectedItem as ReconciliationMonthOption)?.Number;
             var locationId = (locationBox.SelectedItem as ReconciliationLocationOption)?.Id;
+
             var conflictKeys = _db.FiscalSourceConflicts()
                 .Select(x => (x.OrganizationId, x.LocationId, x.BusinessDate))
                 .ToHashSet();
 
-            // Баланс считаем по всей истории выбранной точки.
-            // Год и месяц меняют только видимые строки и не обнуляют старые ошибки.
+            // История нужна целиком: фильтр года/месяца не должен обнулять старые ошибки.
             var allTimeDays = _db.ReconciliationDays(SelectedOrganizationId, locationId: locationId)
                 .Select(x => conflictKeys.Contains((x.OrganizationId, x.LocationId, x.Date))
                     ? x with
@@ -154,44 +222,79 @@ public partial class MainWindow
                 }
             }
 
-            var days = allTimeDays
+            var visibleDays = allTimeDays
                 .Where(x => x.Date.Year == year && (month is null || x.Date.Month == month))
+                .OrderByDescending(x => x.Date)
+                .ThenBy(x => x.Location)
                 .ToArray();
-            var rows = days
+
+            currentDailyRows = visibleDays
                 .Select(x => new ReconciliationRow(x, accumulatedByDay.GetValueOrDefault((x.LocationId, x.Date))))
                 .ToArray();
-            currentRows = rows;
+            dailyGrid.ItemsSource = currentDailyRows;
+
+            currentMonthlyRows = allTimeDays
+                .GroupBy(x => new { x.Date.Year, x.Date.Month, x.LocationId, Point = x.Location })
+                .Select(g =>
+                {
+                    var terminal = Money.Normalize(g.Sum(x => x.BankElectronic ?? 0m));
+                    var cash = Money.Normalize(g.Sum(x => x.CashElectronic ?? 0m));
+                    var lastDate = g.Max(x => x.Date);
+                    var accumulated = accumulatedByDay.GetValueOrDefault((g.Key.LocationId, lastDate));
+                    return new ReconciliationMonthRow(
+                        g.Key.Year,
+                        g.Key.Month,
+                        g.Key.LocationId,
+                        g.Key.Point,
+                        terminal,
+                        cash,
+                        Money.Normalize(terminal - cash),
+                        accumulated,
+                        g.Count(x => x.RequiresReview));
+                })
+                .Where(x => x.Year == year && (month is null || x.Month == month))
+                .OrderByDescending(x => x.Year)
+                .ThenByDescending(x => x.Month)
+                .ThenBy(x => x.Point)
+                .ToArray();
+            monthlyGrid.ItemsSource = currentMonthlyRows;
+
             currentAllTimeDays = allTimeDays;
-            grid.ItemsSource = rows;
 
-            var terminalKnown = days.Where(x => x.BankElectronic is not null).Select(x => x.BankElectronic!.Value).ToArray();
-            var cashKnown = days.Where(x => x.CashElectronic is not null).Select(x => x.CashElectronic!.Value).ToArray();
-            var latestByPoint = days.GroupBy(x => x.LocationId).Select(g => g.OrderByDescending(x => x.Date).First()).ToArray();
-            var remaining = latestByPoint.Sum(x => x.CumulativeOutstanding);
-            var missingCash = days.Count(x => x.HasBankData && !x.HasCashData && x.DayRemaining > 0m);
-            var review = days.Count(x => x.RequiresReview);
-
-            var allTimeTerminal = allTimeDays.Sum(x => x.BankElectronic ?? 0m);
-            var allTimeCash = allTimeDays.Sum(x => x.CashElectronic ?? 0m);
+            var allTimeTerminal = Money.Normalize(allTimeDays.Sum(x => x.BankElectronic ?? 0m));
+            var allTimeCash = Money.Normalize(allTimeDays.Sum(x => x.CashElectronic ?? 0m));
             var needToPunch = Money.Normalize(allTimeTerminal - allTimeCash);
-            var allTimeReview = allTimeDays.Count(x => x.RequiresReview);
-            var action = needToPunch > 0m
-                ? $"НАДО ПРОБИТЬ: {needToPunch:N2} ₽"
-                : needToPunch < 0m
-                    ? $"ПЕРЕБИТО: {Math.Abs(needToPunch):N2} ₽"
-                    : "СОШЛОСЬ: 0,00 ₽";
-            var accumulatedHeader = locationId is null
-                ? $"ВСЕ ТОЧКИ — общий баланс: {needToPunch:N2} ₽; точную сумму для каждой точки см. в колонке «Накопительно»"
-                : $"НАКОПИТЕЛЬНО ЗА ВСЁ ВРЕМЯ — {action}";
+            var review = allTimeDays.Count(x => x.RequiresReview);
+            var selectedPointName = (locationBox.SelectedItem as ReconciliationLocationOption)?.Name ?? "Все точки";
 
-            totals.Text =
-                $"{accumulatedHeader}     •     Терминалы: {allTimeTerminal:N2} ₽     •     Касса: {allTimeCash:N2} ₽" +
-                (allTimeReview > 0 ? $"     •     На проверке: {allTimeReview}" : "") +
-                Environment.NewLine +
-                $"Выбранный период — Терминалы: {(terminalKnown.Length == 0 ? "нет данных" : terminalKnown.Sum().ToString("N2") + " ₽")}     •     " +
-                $"Касса: {(cashKnown.Length == 0 ? "нет данных" : cashKnown.Sum().ToString("N2") + " ₽")}     •     " +
-                $"FIFO-остаток: {remaining:N2} ₽     •     " +
-                $"Дней без кассовых данных: {missingCash}     •     Требует проверки: {review}";
+            if (locationId is null)
+            {
+                accumulatedTitle.Text = $"ВСЕ ТОЧКИ — СУММАРНАЯ РАЗНИЦА: {needToPunch:N2} ₽";
+                accumulatedDetails.Text =
+                    $"Терминалы за всё время: {allTimeTerminal:N2} ₽     •     Касса безнал за всё время: {allTimeCash:N2} ₽     •     " +
+                    $"Для точной суммы «сколько пробить» по конкретной кассе выбери точку. На проверке дней: {review}.";
+            }
+            else if (needToPunch > 0m)
+            {
+                accumulatedTitle.Text = $"НАДО ПРОБИТЬ НА КАССЕ: {needToPunch:N2} ₽";
+                accumulatedDetails.Text =
+                    $"{selectedPointName}. Накопительно за всё время: терминалы {allTimeTerminal:N2} ₽ − касса {allTimeCash:N2} ₽. " +
+                    $"После исправления эта сумма должна стать 0,00 ₽. На проверке дней: {review}.";
+            }
+            else if (needToPunch < 0m)
+            {
+                accumulatedTitle.Text = $"НА КАССЕ ПЕРЕБИТО: {Math.Abs(needToPunch):N2} ₽";
+                accumulatedDetails.Text =
+                    $"{selectedPointName}. Накопительно за всё время: терминалы {allTimeTerminal:N2} ₽ − касса {allTimeCash:N2} ₽. " +
+                    $"На проверке дней: {review}.";
+            }
+            else
+            {
+                accumulatedTitle.Text = "КАССА И ТЕРМИНАЛ СОШЛИСЬ: 0,00 ₽";
+                accumulatedDetails.Text =
+                    $"{selectedPointName}. Накопительно за всё время: терминалы {allTimeTerminal:N2} ₽, касса {allTimeCash:N2} ₽. " +
+                    $"На проверке дней: {review}.";
+            }
         }
 
         exportButton.Click += (_, _) =>
@@ -199,36 +302,47 @@ public partial class MainWindow
             if (yearBox.SelectedItem is not int selectedYear) return;
             var selectedMonth = (monthBox.SelectedItem as ReconciliationMonthOption)?.Number;
             var selectedLocation = locationBox.SelectedItem as ReconciliationLocationOption;
-            ExportReconciliationExcel(currentRows, currentAllTimeDays, selectedYear, selectedMonth, selectedLocation?.Name ?? "Все точки");
+            ExportReconciliationExcel(
+                currentDailyRows,
+                currentMonthlyRows,
+                currentAllTimeDays,
+                selectedYear,
+                selectedMonth,
+                selectedLocation?.Name ?? "Все точки");
         };
 
         yearBox.SelectionChanged += (_, _) => RefreshRows();
         monthBox.SelectionChanged += (_, _) => RefreshRows();
         locationBox.SelectionChanged += (_, _) => RefreshRows();
 
-        grid.MouseDoubleClick += (_, _) =>
+        dailyGrid.MouseDoubleClick += (_, _) =>
         {
-            if (grid.SelectedItem is not ReconciliationRow row) return;
+            if (dailyGrid.SelectedItem is not ReconciliationRow row) return;
             ShowReconciliationExplanation(row.Day);
         };
         var menu = new ContextMenu();
         var explain = new MenuItem { Header = "Показать, чем закрыта сумма..." };
-        explain.Click += (_, _) => { if (grid.SelectedItem is ReconciliationRow row) ShowReconciliationExplanation(row.Day); };
+        explain.Click += (_, _) =>
+        {
+            if (dailyGrid.SelectedItem is ReconciliationRow row)
+                ShowReconciliationExplanation(row.Day);
+        };
         menu.Items.Add(explain);
-        grid.ContextMenu = menu;
+        dailyGrid.ContextMenu = menu;
 
         RefreshRows();
         return root;
     }
 
     private void ExportReconciliationExcel(
-        IReadOnlyList<ReconciliationRow> rows,
+        IReadOnlyList<ReconciliationRow> dailyRows,
+        IReadOnlyList<ReconciliationMonthRow> monthlyRows,
         IReadOnlyList<ReconciliationDay> allTimeDays,
         int year,
         int? month,
         string locationName)
     {
-        if (rows.Count == 0)
+        if (dailyRows.Count == 0 && monthlyRows.Count == 0)
         {
             MessageBox.Show(this, "За выбранный период нет строк для выгрузки.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
@@ -241,7 +355,7 @@ public partial class MainWindow
         var safePoint = string.Concat(locationName.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
         var dialog = new SaveFileDialog
         {
-            Title = "Выгрузить сверку в Excel",
+            Title = "Экспорт сверки в Excel",
             Filter = "Excel (*.xlsx)|*.xlsx",
             FileName = $"Сверка_{safePoint}_{year}{(month is int selectedMonth ? $"-{selectedMonth:00}" : "")}.xlsx",
             AddExtension = true,
@@ -249,8 +363,8 @@ public partial class MainWindow
         };
         if (dialog.ShowDialog(this) != true) return;
 
-        var allTimeTerminal = allTimeDays.Sum(x => x.BankElectronic ?? 0m);
-        var allTimeCash = allTimeDays.Sum(x => x.CashElectronic ?? 0m);
+        var allTimeTerminal = Money.Normalize(allTimeDays.Sum(x => x.BankElectronic ?? 0m));
+        var allTimeCash = Money.Normalize(allTimeDays.Sum(x => x.CashElectronic ?? 0m));
         var allTimeBalance = Money.Normalize(allTimeTerminal - allTimeCash);
         var action = allTimeBalance > 0m
             ? $"Надо пробить {allTimeBalance:N2} ₽"
@@ -266,69 +380,139 @@ public partial class MainWindow
         stylesPart.Stylesheet = BuildReconciliationStyles();
         stylesPart.Stylesheet.Save();
 
-        var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
-        var columns = new Columns(
-            new Column { Min = 1, Max = 1, Width = 13, CustomWidth = true },
-            new Column { Min = 2, Max = 2, Width = 28, CustomWidth = true },
-            new Column { Min = 3, Max = 10, Width = 16, CustomWidth = true },
-            new Column { Min = 11, Max = 11, Width = 23, CustomWidth = true },
-            new Column { Min = 12, Max = 12, Width = 38, CustomWidth = true },
-            new Column { Min = 13, Max = 14, Width = 20, CustomWidth = true });
-        var sheetData = new SheetData();
-        worksheetPart.Worksheet = new Worksheet(columns, sheetData);
+        var sheets = workbookPart.Workbook.AppendChild(new Sheets());
 
-        sheetData.Append(ExcelTextRow("Сверка касса ↔ терминал", 1));
-        sheetData.Append(ExcelTextRow($"Период: {period}"));
-        sheetData.Append(ExcelTextRow($"Точка: {locationName}"));
-        sheetData.Append(ExcelMixedRow(
-            ("Терминалы за всё время", allTimeTerminal),
-            ("Касса за всё время", allTimeCash),
-            ("Накопительный баланс", allTimeBalance)));
-        sheetData.Append(ExcelTextRow($"Итог: {action}", 1));
-        sheetData.Append(new Row());
-
-        var headers = new[]
+        var summaryRows = new List<Row>
         {
-            "Дата", "Точка", "Терминалы", "Касса безнал", "Непробито ранее", "Погашено кассой",
-            "Пробито позже", "Остаток за день", "Общий FIFO остаток", "Накопительный баланс",
-            "Действие", "Статус", "Закрытие смены", "№ смены"
+            ExcelTextRow("Сверка касса ↔ терминал", 1),
+            ExcelTextRow($"Период выгрузки: {period}"),
+            ExcelTextRow($"Точка: {locationName}"),
+            new Row(),
+            ExcelLabelMoneyRow("Терминалы за всё время", allTimeTerminal),
+            ExcelLabelMoneyRow("Касса безнал за всё время", allTimeCash),
+            ExcelLabelMoneyRow("Накопительно недопробито", allTimeBalance),
+            ExcelTextRow($"Итог: {action}", 1),
+            ExcelTextRow($"Дней на проверке за всё время: {allTimeDays.Count(x => x.RequiresReview)}")
         };
-        var headerRow = new Row();
-        foreach (var header in headers) headerRow.Append(ExcelTextCell(header, 1));
-        sheetData.Append(headerRow);
+        AddReconciliationSheet(
+            workbookPart,
+            sheets,
+            1,
+            "Итоги",
+            new Columns(
+                new Column { Min = 1, Max = 1, Width = 34, CustomWidth = true },
+                new Column { Min = 2, Max = 2, Width = 20, CustomWidth = true }),
+            summaryRows);
 
-        foreach (var row in rows)
+        var dailySheetRows = new List<Row>();
+        var dailyHeader = new Row();
+        foreach (var header in new[]
+        {
+            "Дата", "Точка", "Терминалы", "Касса безнал", "Разница за день",
+            "Накопительно недопробито", "Что делать", "FIFO остаток", "Статус", "Закрытие смены", "№ смены"
+        })
+            dailyHeader.Append(ExcelTextCell(header, 1));
+        dailySheetRows.Add(dailyHeader);
+
+        foreach (var row in dailyRows)
         {
             var excelRow = new Row();
             excelRow.Append(ExcelTextCell(row.Date));
             excelRow.Append(ExcelTextCell(row.Point));
             excelRow.Append(ExcelMoneyCell(row.Terminal));
             excelRow.Append(ExcelMoneyCell(row.Cash));
-            excelRow.Append(ExcelMoneyCell(row.Prior));
-            excelRow.Append(ExcelMoneyCell(row.CashApplied));
-            excelRow.Append(ExcelMoneyCell(row.ClosedLater));
-            excelRow.Append(ExcelMoneyCell(row.DayRemaining));
-            excelRow.Append(ExcelMoneyCell(row.TotalRemaining));
+            excelRow.Append(ExcelMoneyCell(row.DayDifference));
             excelRow.Append(ExcelMoneyCell(row.AccumulatedBalance));
             excelRow.Append(ExcelTextCell(row.AccumulatedAction));
+            excelRow.Append(ExcelMoneyCell(row.TotalRemaining));
             excelRow.Append(ExcelTextCell(row.Status));
             excelRow.Append(ExcelTextCell(row.ClosedAt));
             excelRow.Append(ExcelTextCell(row.Shift));
-            sheetData.Append(excelRow);
+            dailySheetRows.Add(excelRow);
         }
 
-        var sheets = workbookPart.Workbook.AppendChild(new Sheets());
-        sheets.Append(new Sheet
+        AddReconciliationSheet(
+            workbookPart,
+            sheets,
+            2,
+            "По дням",
+            new Columns(
+                new Column { Min = 1, Max = 1, Width = 13, CustomWidth = true },
+                new Column { Min = 2, Max = 2, Width = 30, CustomWidth = true },
+                new Column { Min = 3, Max = 6, Width = 19, CustomWidth = true },
+                new Column { Min = 7, Max = 7, Width = 24, CustomWidth = true },
+                new Column { Min = 8, Max = 8, Width = 17, CustomWidth = true },
+                new Column { Min = 9, Max = 9, Width = 40, CustomWidth = true },
+                new Column { Min = 10, Max = 11, Width = 20, CustomWidth = true }),
+            dailySheetRows);
+
+        var monthlySheetRows = new List<Row>();
+        var monthlyHeader = new Row();
+        foreach (var header in new[]
         {
-            Id = workbookPart.GetIdOfPart(worksheetPart),
-            SheetId = 1,
-            Name = "Сверка"
-        });
-        worksheetPart.Worksheet.Save();
+            "Месяц", "Точка", "Терминалы", "Касса безнал", "Разница месяца",
+            "Накопительно недопробито", "Что делать", "Дней на проверке"
+        })
+            monthlyHeader.Append(ExcelTextCell(header, 1));
+        monthlySheetRows.Add(monthlyHeader);
+
+        foreach (var row in monthlyRows)
+        {
+            var excelRow = new Row();
+            excelRow.Append(ExcelTextCell(row.Period));
+            excelRow.Append(ExcelTextCell(row.Point));
+            excelRow.Append(ExcelMoneyCell(row.Terminal));
+            excelRow.Append(ExcelMoneyCell(row.Cash));
+            excelRow.Append(ExcelMoneyCell(row.Difference));
+            excelRow.Append(ExcelMoneyCell(row.AccumulatedBalance));
+            excelRow.Append(ExcelTextCell(row.Action));
+            excelRow.Append(ExcelNumberCell(row.ReviewDays));
+            monthlySheetRows.Add(excelRow);
+        }
+
+        AddReconciliationSheet(
+            workbookPart,
+            sheets,
+            3,
+            "По месяцам",
+            new Columns(
+                new Column { Min = 1, Max = 1, Width = 13, CustomWidth = true },
+                new Column { Min = 2, Max = 2, Width = 30, CustomWidth = true },
+                new Column { Min = 3, Max = 6, Width = 20, CustomWidth = true },
+                new Column { Min = 7, Max = 7, Width = 24, CustomWidth = true },
+                new Column { Min = 8, Max = 8, Width = 18, CustomWidth = true }),
+            monthlySheetRows);
+
         workbookPart.Workbook.Save();
 
         StatusText.Text = $"Excel сохранён: {dialog.FileName}";
-        MessageBox.Show(this, $"Excel-файл сохранён.\n\n{dialog.FileName}", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+        MessageBox.Show(this,
+            $"Excel сохранён.\n\nВ файле 3 листа: «Итоги», «По дням», «По месяцам».\n\n{dialog.FileName}",
+            "КОП Кассы",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private static void AddReconciliationSheet(
+        WorkbookPart workbookPart,
+        Sheets sheets,
+        uint sheetId,
+        string name,
+        Columns columns,
+        IEnumerable<Row> rows)
+    {
+        var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+        var sheetData = new SheetData();
+        worksheetPart.Worksheet = new Worksheet(columns, sheetData);
+        foreach (var row in rows) sheetData.Append(row);
+        worksheetPart.Worksheet.Save();
+
+        sheets.Append(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(worksheetPart),
+            SheetId = sheetId,
+            Name = name
+        });
     }
 
     private static Stylesheet BuildReconciliationStyles() => new(
@@ -352,14 +536,11 @@ public partial class MainWindow
         return row;
     }
 
-    private static Row ExcelMixedRow(params (string Label, decimal Value)[] values)
+    private static Row ExcelLabelMoneyRow(string label, decimal value)
     {
         var row = new Row();
-        foreach (var item in values)
-        {
-            row.Append(ExcelTextCell(item.Label, 1));
-            row.Append(ExcelMoneyCell(item.Value));
-        }
+        row.Append(ExcelTextCell(label, 1));
+        row.Append(ExcelMoneyCell(value));
         return row;
     }
 
@@ -380,6 +561,12 @@ public partial class MainWindow
             CellValue = new CellValue(value.Value.ToString(CultureInfo.InvariantCulture))
         };
     }
+
+    private static Cell ExcelNumberCell(int value) => new()
+    {
+        DataType = CellValues.Number,
+        CellValue = new CellValue(value.ToString(CultureInfo.InvariantCulture))
+    };
 
     private void ShowReconciliationExplanation(ReconciliationDay day)
     {
