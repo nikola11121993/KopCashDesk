@@ -167,7 +167,8 @@ public partial class MainWindow
             AutoGenerateColumns = false,
             CanUserAddRows = false,
             CanUserDeleteRows = false,
-            SelectionMode = DataGridSelectionMode.Single,
+            SelectionMode = DataGridSelectionMode.Extended,
+            SelectionUnit = DataGridSelectionUnit.FullRow,
             FrozenColumnCount = 2
         };
         monthlyGrid.Columns.Add(ReconciliationTextColumn("Месяц", "Period", 95));
@@ -179,15 +180,80 @@ public partial class MainWindow
         monthlyGrid.Columns.Add(ReconciliationTextColumn("Что делать", "Action", 175));
         monthlyGrid.Columns.Add(ReconciliationTextColumn("Дней на проверке", "ReviewDays", 125));
 
+        var selectedMonthsTitle = new TextBlock
+        {
+            Text = "Выдели нужные месяцы мышкой. Несколько подряд — Shift, выборочно — Ctrl.",
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var selectedMonthsTotals = new TextBlock
+        {
+            Text = "Выбранные месяцы: нет",
+            Margin = new Thickness(0, 4, 0, 0),
+            FontSize = 14,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var selectedMonthsPanel = new StackPanel();
+        selectedMonthsPanel.Children.Add(selectedMonthsTitle);
+        selectedMonthsPanel.Children.Add(selectedMonthsTotals);
+
+        var selectedMonthsCard = new System.Windows.Controls.Border
+        {
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(12, 8, 12, 8),
+            Margin = new Thickness(0, 0, 0, 8),
+            Child = selectedMonthsPanel
+        };
+
+        var monthlyTabRoot = new Grid();
+        monthlyTabRoot.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        monthlyTabRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        monthlyTabRoot.Children.Add(selectedMonthsCard);
+        Grid.SetRow(monthlyGrid, 1);
+        monthlyTabRoot.Children.Add(monthlyGrid);
+
         var tabs = new TabControl();
         tabs.Items.Add(new TabItem { Header = "По дням", Content = dailyGrid });
-        tabs.Items.Add(new TabItem { Header = "По месяцам", Content = monthlyGrid });
+        tabs.Items.Add(new TabItem { Header = "По месяцам", Content = monthlyTabRoot });
         Grid.SetRow(tabs, 2);
         root.Children.Add(tabs);
 
         ReconciliationRow[] currentDailyRows = [];
         ReconciliationMonthRow[] currentMonthlyRows = [];
         ReconciliationDay[] currentAllTimeDays = [];
+
+        void RefreshSelectedMonthsTotals()
+        {
+            var selected = monthlyGrid.SelectedItems
+                .OfType<ReconciliationMonthRow>()
+                .ToArray();
+
+            if (selected.Length == 0)
+            {
+                selectedMonthsTotals.Text = "Выбранные месяцы: нет";
+                return;
+            }
+
+            var terminal = Money.Normalize(selected.Sum(x => x.Terminal));
+            var cash = Money.Normalize(selected.Sum(x => x.Cash));
+            var difference = Money.Normalize(terminal - cash);
+            var action = difference > 0m
+                ? $"НАДО ПРОБИТЬ {difference:N2} ₽"
+                : difference < 0m
+                    ? $"ПЕРЕБИТО {Math.Abs(difference):N2} ₽"
+                    : "СОШЛОСЬ 0,00 ₽";
+
+            var distinctMonths = selected
+                .Select(x => x.Period)
+                .Distinct()
+                .OrderBy(x => x)
+                .ToArray();
+
+            selectedMonthsTotals.Text =
+                $"Выбрано месяцев: {distinctMonths.Length} ({string.Join(", ", distinctMonths)})     •     " +
+                $"Терминалы: {terminal:N2} ₽     •     Касса: {cash:N2} ₽     •     " +
+                $"Разница: {difference:N2} ₽     •     {action}";
+        }
 
         void RefreshRows()
         {
@@ -260,6 +326,8 @@ public partial class MainWindow
                 .ThenBy(x => x.Point)
                 .ToArray();
             monthlyGrid.ItemsSource = currentMonthlyRows;
+            monthlyGrid.SelectedItems.Clear();
+            RefreshSelectedMonthsTotals();
 
             currentAllTimeDays = yearDays;
 
@@ -316,6 +384,7 @@ public partial class MainWindow
         yearBox.SelectionChanged += (_, _) => RefreshRows();
         monthBox.SelectionChanged += (_, _) => RefreshRows();
         locationBox.SelectionChanged += (_, _) => RefreshRows();
+        monthlyGrid.SelectionChanged += (_, _) => RefreshSelectedMonthsTotals();
 
         dailyGrid.MouseDoubleClick += (_, _) =>
         {
