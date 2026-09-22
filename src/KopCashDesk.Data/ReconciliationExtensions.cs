@@ -56,7 +56,7 @@ public static class ReconciliationExtensions
         foreach (var location in locations)
         {
             if (!organizations.TryGetValue(location.OrganizationId, out var organization)) continue;
-            var days = RecalculateLocation(database, organization, location);
+            var days = RecalculateLocation(database, organization, location, year);
             result.AddRange(days.Where(x =>
                 (year is null || x.Date.Year == year) &&
                 (month is null || x.Date.Month == month)));
@@ -105,20 +105,36 @@ public static class ReconciliationExtensions
         return result;
     }
 
-    private static IReadOnlyList<ReconciliationDay> RecalculateLocation(Database database, Organization organization, Location location)
+    private static IReadOnlyList<ReconciliationDay> RecalculateLocation(
+        Database database,
+        Organization organization,
+        Location location,
+        int? year)
     {
         using var db = Open(database);
         using var transaction = db.BeginTransaction();
 
-        var bankDays = ReadBankDays(db, transaction, organization.Id, location.Id);
-        var fiscalEvents = ReadFiscalEvents(db, transaction, organization.Id, location.Id);
-        var frontolConflictFallbackEvents = ReadFrontolConflictFallbackEvents(db, transaction, organization.Id, location.Id);
-        var manualEvents = ReadManualEvents(db, transaction, organization.Id, location.Id);
-        var shifts = ReadShiftMeta(db, transaction, organization.Id, location.Id);
+        var bankDays = ReadBankDays(db, transaction, organization.Id, location.Id)
+            .Where(x => year is null || x.Date.Year == year)
+            .ToList();
+        var fiscalEvents = ReadFiscalEvents(db, transaction, organization.Id, location.Id)
+            .Where(x => year is null || x.Date.Year == year)
+            .ToList();
+        var frontolConflictFallbackEvents = ReadFrontolConflictFallbackEvents(db, transaction, organization.Id, location.Id)
+            .Where(x => year is null || x.Date.Year == year)
+            .ToList();
+        var manualEvents = ReadManualEvents(db, transaction, organization.Id, location.Id)
+            .Where(x => year is null || x.Date.Year == year)
+            .ToList();
+        var shifts = ReadShiftMeta(db, transaction, organization.Id, location.Id)
+            .Where(x => year is null || x.Date.Year == year)
+            .ToList();
 
         DeleteAllocations(db, transaction, organization.Id, location.Id);
 
-        var conflicts = database.CrossSourceConflictDates(organization.Id, location.Id);
+        var conflicts = database.CrossSourceConflictDates(organization.Id, location.Id)
+            .Where(x => year is null || x.Year == year)
+            .ToHashSet();
         var manualDates = manualEvents.Select(x => x.Date).ToHashSet();
 
         // На конфликтной дате canonical_fiscal_operations намеренно не выбирает ни один источник.
