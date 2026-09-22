@@ -13,14 +13,6 @@ public static class KnownBusinessRules
     public const string AtiMercuryRegisterSerial = "08050950";
     public const string AtiMercuryPointName = "Столовая АТИ";
 
-    public const string Mira4PointName = "Мира 4";
-    public const string Mira4PosTid = "43151534";
-    public const string Mira4SbpTid = "43151533";
-    public const string Mira4QrTid = "43151535";
-    public static readonly DateOnly Mira4OldCashThrough = new(2026, 3, 31);
-    public static readonly DateOnly Mira4OldBankThrough = new(2026, 4, 11);
-    public static readonly DateOnly Mira4NewHistoryFrom = new(2026, 4, 14);
-
     public static string? PointNameForRegisterSerial(string serial)
     {
         var digits = DigitsOnly(serial);
@@ -66,13 +58,8 @@ public static class KnownBusinessRules
             applied += TryKnownRegisterLocation(database, organization.Id, AtiAppetitRegisterSerial, AtiAppetitPointName, ref backupTaken);
             applied += TryKnownRegisterLocation(database, organization.Id, AtiMercuryRegisterSerial, AtiMercuryPointName, ref backupTaken);
 
-            // Подтверждённая пользователем история одной физической кассы:
-            // Вороний Брод / Белокаменный -> Ленинградская 1 -> Мира 4.
-            // История переносится только в подтверждённых временных границах,
-            // чтобы старые терминалы после переезда не задваивали новую точку.
-            if (DigitsOnly(organization.TaxId) == "6683009222")
-                applied += TryMira4MovingCashboxHistory(database, organization.Id, ref backupTaken);
-
+            // Белокаменный кафе -> Ленинградская 1 -> Мира 4 describes a moving KKT,
+            // not aliases for one address. No date-free history merges, including bank/UBRiR rows.
             applied += TryReftinskayaDuplicate(database, organization.Id);
         }
 
@@ -255,232 +242,6 @@ public static class KnownBusinessRules
         return changed > 0 ? 1 : 0;
     }
 
-    private static int TryMira4MovingCashboxHistory(Database database, Guid organizationId, ref bool backupTaken)
-    {
-        const string ruleKeyPrefix = "known.mira4-moving-cashbox.v1";
-        var ruleKey = $"{ruleKeyPrefix}:{organizationId:N}";
-
-        var locations = database.Locations(includeInactive: true)
-            .Where(x => x.OrganizationId == organizationId)
-            .ToArray();
-        if (locations.Length == 0) return 0;
-
-        var terminals = database.TerminalBindings()
-            .Where(x => x.OrganizationId == organizationId)
-            .ToArray();
-
-        var posBinding = terminals.FirstOrDefault(x =>
-            x.Provider.Equals("Sber", StringComparison.OrdinalIgnoreCase) &&
-            DigitsOnly(x.TerminalId) == Mira4PosTid);
-
-        Location? target = null;
-        if (posBinding is not null)
-            target = locations.FirstOrDefault(x => x.Id == posBinding.LocationId && x.IsActive);
-
-        if (target is null)
-        {
-            var namedTargets = locations
-                .Where(x => x.IsActive && IsMira4Name(x.Name))
-                .ToArray();
-            if (namedTargets.Length == 1)
-                target = namedTargets[0];
-        }
-
-        if (target is null) return 0;
-
-        var oldSources = locations
-            .Where(x => x.Id != target.Id && IsOldMovingCashboxPoint(x.Name))
-            .Select(x => x.Id)
-            .Distinct()
-            .ToArray();
-
-        var leningradSources = locations
-            .Where(x => x.Id != target.Id && IsLeningradskaya1(x.Name))
-            .Select(x => x.Id)
-            .Distinct()
-            .ToArray();
-
-        var miraTerminalLocationIds = terminals
-            .Where(x => x.Provider.Equals("Sber", StringComparison.OrdinalIgnoreCase) &&
-                        (DigitsOnly(x.TerminalId) == Mira4PosTid ||
-                         DigitsOnly(x.TerminalId) == Mira4SbpTid ||
-                         DigitsOnly(x.TerminalId) == Mira4QrTid))
-            .Select(x => x.LocationId)
-            .Where(x => x != target.Id)
-            .Distinct()
-            .ToArray();
-
-        if (oldSources.Length == 0 && leningradSources.Length == 0 && miraTerminalLocationIds.Length == 0)
-            return 0;
-
-        if (!backupTaken && !IsApplied(database, ruleKey))
-        {
-            database.BackupBeforeMigration(4);
-            backupTaken = true;
-        }
-
-        var changed = 0;
-        using (var db = Open(database))
-        using (var tx = db.BeginTransaction())
-        {
-            foreach (var source in oldSources)
-            {
-                changed += MoveOperations(
-                    db, tx, organizationId, source, target.Id,
-                    "source_kind='Bank' AND substr(occurred_at,1,10)<=$through",
-                    ("$through", Mira4OldBankThrough.ToString("yyyy-MM-dd")));
-
-                changed += MoveOperations(
-                    db, tx, organizationId, source, target.Id,
-                    "source_kind<>'Bank' AND substr(occurred_at,1,10)<=$through",
-                    ("$through", Mira4OldCashThrough.ToString("yyyy-MM-dd")));
-
-                changed += MoveShifts(
-                    db, tx, organizationId, source, target.Id,
-                    "substr(closed_at,1,10)<=$through",
-                    ("$through", Mira4OldCashThrough.ToString("yyyy-MM-dd")));
-            }
-
-            foreach (var source in leningradSources)
-            {
-                changed += MoveOperations(
-                    db, tx, organizationId, source, target.Id,
-                    "source_kind<>'Bank' AND substr(occurred_at,1,10)>=$from",
-                    ("$from", Mira4NewHistoryFrom.ToString("yyyy-MM-dd")));
-
-                changed += MoveShifts(
-                    db, tx, organizationId, source, target.Id,
-                    "substr(closed_at,1,10)>=$from",
-                    ("$from", Mira4NewHistoryFrom.ToString("yyyy-MM-dd")));
-            }
-
-            foreach (var source in miraTerminalLocationIds)
-            {
-                changed += MoveOperations(
-                    db, tx, organizationId, source, target.Id,
-                    "source_kind='Bank' AND substr(occurred_at,1,10)>=$from",
-                    ("$from", Mira4NewHistoryFrom.ToString("yyyy-MM-dd")));
-            }
-
-            // POS / QR / СБП Мира 4 должны смотреть в одну текущую точку.
-            // Ручную защищённую привязку не перезаписываем.
-            using (var terminalUpdate = db.CreateCommand())
-            {
-                terminalUpdate.Transaction = tx;
-                terminalUpdate.CommandText = """
-                    UPDATE terminal_bindings
-                    SET location_id=$target,binding_source='Rule'
-                    WHERE organization_id=$org
-                      AND provider='Sber'
-                      AND tid IN($pos,$sbp,$qr)
-                      AND binding_source<>'Manual'
-                      AND is_locked=0
-                      AND location_id<>$target;
-                    """;
-                terminalUpdate.Parameters.AddWithValue("$target", target.Id.ToString());
-                terminalUpdate.Parameters.AddWithValue("$org", organizationId.ToString());
-                terminalUpdate.Parameters.AddWithValue("$pos", Mira4PosTid);
-                terminalUpdate.Parameters.AddWithValue("$sbp", Mira4SbpTid);
-                terminalUpdate.Parameters.AddWithValue("$qr", Mira4QrTid);
-                changed += terminalUpdate.ExecuteNonQuery();
-            }
-
-            if (changed > 0)
-            {
-                using var reset = db.CreateCommand();
-                reset.Transaction = tx;
-                reset.CommandText = "DELETE FROM reconciliation_allocations WHERE organization_id=$org;";
-                reset.Parameters.AddWithValue("$org", organizationId.ToString());
-                reset.ExecuteNonQuery();
-
-                using var audit = db.CreateCommand();
-                audit.Transaction = tx;
-                audit.CommandText = """
-                    INSERT INTO audit_log(occurred_at,action,details)
-                    VALUES($time,'known.mira4-moving-cashbox',$details);
-                    """;
-                audit.Parameters.AddWithValue("$time", DateTimeOffset.UtcNow.ToString("O"));
-                audit.Parameters.AddWithValue("$details",
-                    $"target={target.Id} ({target.Name}); old_cash_through={Mira4OldCashThrough:yyyy-MM-dd}; " +
-                    $"old_bank_through={Mira4OldBankThrough:yyyy-MM-dd}; new_history_from={Mira4NewHistoryFrom:yyyy-MM-dd}; changed={changed}");
-                audit.ExecuteNonQuery();
-            }
-
-            tx.Commit();
-        }
-
-        if (!IsApplied(database, ruleKey))
-            MarkApplied(database, ruleKey,
-                $"Вороний Брод/Белокаменный -> Ленинградская 1 -> Мира 4; " +
-                $"cash<={Mira4OldCashThrough:yyyy-MM-dd}; bank<={Mira4OldBankThrough:yyyy-MM-dd}; new>={Mira4NewHistoryFrom:yyyy-MM-dd}; target={target.Id}");
-
-        return changed > 0 ? 1 : 0;
-    }
-
-    private static int MoveOperations(
-        SqliteConnection db,
-        SqliteTransaction tx,
-        Guid organizationId,
-        Guid sourceLocationId,
-        Guid targetLocationId,
-        string extraWhere,
-        params (string Name, object Value)[] args)
-    {
-        using var command = db.CreateCommand();
-        command.Transaction = tx;
-        command.CommandText = $"""
-            UPDATE operations
-            SET location_id=$target
-            WHERE organization_id=$org
-              AND location_id=$source
-              AND ({extraWhere});
-            """;
-        command.Parameters.AddWithValue("$target", targetLocationId.ToString());
-        command.Parameters.AddWithValue("$org", organizationId.ToString());
-        command.Parameters.AddWithValue("$source", sourceLocationId.ToString());
-        foreach (var (name, value) in args) command.Parameters.AddWithValue(name, value);
-        return command.ExecuteNonQuery();
-    }
-
-    private static int MoveShifts(
-        SqliteConnection db,
-        SqliteTransaction tx,
-        Guid organizationId,
-        Guid sourceLocationId,
-        Guid targetLocationId,
-        string extraWhere,
-        params (string Name, object Value)[] args)
-    {
-        using var command = db.CreateCommand();
-        command.Transaction = tx;
-        command.CommandText = $"""
-            UPDATE shift_closures
-            SET location_id=$target
-            WHERE organization_id=$org
-              AND location_id=$source
-              AND ({extraWhere});
-            """;
-        command.Parameters.AddWithValue("$target", targetLocationId.ToString());
-        command.Parameters.AddWithValue("$org", organizationId.ToString());
-        command.Parameters.AddWithValue("$source", sourceLocationId.ToString());
-        foreach (var (name, value) in args) command.Parameters.AddWithValue(name, value);
-        return command.ExecuteNonQuery();
-    }
-
-    private static bool IsOldMovingCashboxPoint(string value)
-    {
-        var key = NormalizeCompact(value);
-        return key is "воронийброд" or "белокаменный" or "белокаменныйкафе" or "bufet";
-    }
-
-    private static bool IsLeningradskaya1(string value) => NormalizeCompact(value) == "ленинградская1";
-
-    private static bool IsMira4Name(string value)
-    {
-        var key = NormalizeCompact(value);
-        return key is "мира4" or "м4";
-    }
-
     private static bool HasRegisterEvidence(Database database, Guid organizationId, string serial)
     {
         using var db = Open(database);
@@ -590,9 +351,6 @@ public static class KnownBusinessRules
 
     private static string Normalize(string value) =>
         string.Join(' ', value.Trim().ToLowerInvariant().Replace('ё', 'е').Split(' ', StringSplitOptions.RemoveEmptyEntries));
-
-    private static string NormalizeCompact(string value) =>
-        new(value.ToLowerInvariant().Replace('ё', 'е').Where(char.IsLetterOrDigit).ToArray());
 
     private static string DigitsOnly(string value) => new(value.Where(char.IsDigit).ToArray());
 
