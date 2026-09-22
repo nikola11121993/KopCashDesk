@@ -70,7 +70,7 @@ public partial class MainWindow
     private UIElement RenderReconciliation()
     {
         PageTitle.Text = "Сверка касса ↔ терминал";
-        PageSubtitle.Text = "По дням, по месяцам и накопительно за всё время. Старые ошибки не обнуляются новым месяцем.";
+        PageSubtitle.Text = "По дням, по месяцам и накопительно внутри выбранного года. Каждый год начинается с нуля.";
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -81,7 +81,8 @@ public partial class MainWindow
         var years = all.Select(x => x.Date.Year).Distinct().OrderByDescending(x => x).ToList();
         if (years.Count == 0) years.Add(DateTime.Today.Year);
 
-        var yearBox = new ComboBox { Width = 105, ItemsSource = years, SelectedItem = years[0], Margin = new Thickness(0, 0, 12, 6) };
+        var defaultYear = years.Contains(DateTime.Today.Year) ? DateTime.Today.Year : years[0];
+        var yearBox = new ComboBox { Width = 105, ItemsSource = years, SelectedItem = defaultYear, Margin = new Thickness(0, 0, 12, 6) };
         var culture = CultureInfo.GetCultureInfo("ru-RU");
         var monthOptions = new List<ReconciliationMonthOption> { new(null, "Все месяцы") };
         for (var month = 1; month <= 12; month++)
@@ -154,9 +155,8 @@ public partial class MainWindow
         dailyGrid.Columns.Add(ReconciliationMoneyColumn("Терминалы", "Terminal", 110));
         dailyGrid.Columns.Add(ReconciliationMoneyColumn("Касса безнал", "Cash", 115));
         dailyGrid.Columns.Add(ReconciliationMoneyColumn("Разница за день", "DayDifference", 125));
-        dailyGrid.Columns.Add(ReconciliationMoneyColumn("Накопительно недопробито", "AccumulatedBalance", 165));
+        dailyGrid.Columns.Add(ReconciliationMoneyColumn("Накопительно с начала года", "AccumulatedBalance", 165));
         dailyGrid.Columns.Add(ReconciliationTextColumn("Что делать", "AccumulatedAction", 170));
-        dailyGrid.Columns.Add(ReconciliationMoneyColumn("FIFO остаток", "TotalRemaining", 115));
         dailyGrid.Columns.Add(ReconciliationTextColumn("Статус", "Status", 220));
         dailyGrid.Columns.Add(ReconciliationTextColumn("Закрытие смены", "ClosedAt", 145));
         dailyGrid.Columns.Add(ReconciliationTextColumn("№ смены", "Shift", 95));
@@ -175,7 +175,7 @@ public partial class MainWindow
         monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Терминалы", "Terminal", 120));
         monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Касса безнал", "Cash", 120));
         monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Разница месяца", "Difference", 130));
-        monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Накопительно недопробито", "AccumulatedBalance", 170));
+        monthlyGrid.Columns.Add(ReconciliationMoneyColumn("Накопительно с начала года", "AccumulatedBalance", 170));
         monthlyGrid.Columns.Add(ReconciliationTextColumn("Что делать", "Action", 175));
         monthlyGrid.Columns.Add(ReconciliationTextColumn("Дней на проверке", "ReviewDays", 125));
 
@@ -199,8 +199,10 @@ public partial class MainWindow
                 .Select(x => (x.OrganizationId, x.LocationId, x.BusinessDate))
                 .ToHashSet();
 
-            // История нужна целиком: фильтр года/месяца не должен обнулять старые ошибки.
-            var allTimeDays = _db.ReconciliationDays(SelectedOrganizationId, locationId: locationId)
+            // Сверка и накопительный остаток считаются ТОЛЬКО внутри выбранного года.
+            // Старые кассовые данные 2023–2025 не должны влиять на 2026 год.
+            var yearDays = _db.ReconciliationDays(SelectedOrganizationId, locationId: locationId)
+                .Where(x => x.Date.Year == year)
                 .Select(x => conflictKeys.Contains((x.OrganizationId, x.LocationId, x.Date))
                     ? x with
                     {
@@ -212,7 +214,7 @@ public partial class MainWindow
                 .ToArray();
 
             var accumulatedByDay = new Dictionary<(Guid LocationId, DateOnly Date), decimal>();
-            foreach (var pointDays in allTimeDays.GroupBy(x => x.LocationId))
+            foreach (var pointDays in yearDays.GroupBy(x => x.LocationId))
             {
                 var accumulated = 0m;
                 foreach (var day in pointDays.OrderBy(x => x.Date))
@@ -222,8 +224,8 @@ public partial class MainWindow
                 }
             }
 
-            var visibleDays = allTimeDays
-                .Where(x => x.Date.Year == year && (month is null || x.Date.Month == month))
+            var visibleDays = yearDays
+                .Where(x => month is null || x.Date.Month == month)
                 .OrderByDescending(x => x.Date)
                 .ThenBy(x => x.Location)
                 .ToArray();
@@ -233,7 +235,7 @@ public partial class MainWindow
                 .ToArray();
             dailyGrid.ItemsSource = currentDailyRows;
 
-            currentMonthlyRows = allTimeDays
+            currentMonthlyRows = yearDays
                 .GroupBy(x => new { x.Date.Year, x.Date.Month, x.LocationId, Point = x.Location })
                 .Select(g =>
                 {
@@ -259,40 +261,40 @@ public partial class MainWindow
                 .ToArray();
             monthlyGrid.ItemsSource = currentMonthlyRows;
 
-            currentAllTimeDays = allTimeDays;
+            currentAllTimeDays = yearDays;
 
-            var allTimeTerminal = Money.Normalize(allTimeDays.Sum(x => x.BankElectronic ?? 0m));
-            var allTimeCash = Money.Normalize(allTimeDays.Sum(x => x.CashElectronic ?? 0m));
-            var needToPunch = Money.Normalize(allTimeTerminal - allTimeCash);
-            var review = allTimeDays.Count(x => x.RequiresReview);
+            var yearTerminal = Money.Normalize(yearDays.Sum(x => x.BankElectronic ?? 0m));
+            var yearCash = Money.Normalize(yearDays.Sum(x => x.CashElectronic ?? 0m));
+            var needToPunch = Money.Normalize(yearTerminal - yearCash);
+            var review = yearDays.Count(x => x.RequiresReview);
             var selectedPointName = (locationBox.SelectedItem as ReconciliationLocationOption)?.Name ?? "Все точки";
 
             if (locationId is null)
             {
                 accumulatedTitle.Text = $"ВСЕ ТОЧКИ — СУММАРНАЯ РАЗНИЦА: {needToPunch:N2} ₽";
                 accumulatedDetails.Text =
-                    $"Терминалы за всё время: {allTimeTerminal:N2} ₽     •     Касса безнал за всё время: {allTimeCash:N2} ₽     •     " +
+                    $"Терминалы за {year} год: {yearTerminal:N2} ₽     •     Касса безнал за {year} год: {yearCash:N2} ₽     •     " +
                     $"Для точной суммы «сколько пробить» по конкретной кассе выбери точку. На проверке дней: {review}.";
             }
             else if (needToPunch > 0m)
             {
                 accumulatedTitle.Text = $"НАДО ПРОБИТЬ НА КАССЕ: {needToPunch:N2} ₽";
                 accumulatedDetails.Text =
-                    $"{selectedPointName}. Накопительно за всё время: терминалы {allTimeTerminal:N2} ₽ − касса {allTimeCash:N2} ₽. " +
+                    $"{selectedPointName}. Накопительно за {year} год: терминалы {yearTerminal:N2} ₽ − касса {yearCash:N2} ₽. " +
                     $"После исправления эта сумма должна стать 0,00 ₽. На проверке дней: {review}.";
             }
             else if (needToPunch < 0m)
             {
                 accumulatedTitle.Text = $"НА КАССЕ ПЕРЕБИТО: {Math.Abs(needToPunch):N2} ₽";
                 accumulatedDetails.Text =
-                    $"{selectedPointName}. Накопительно за всё время: терминалы {allTimeTerminal:N2} ₽ − касса {allTimeCash:N2} ₽. " +
+                    $"{selectedPointName}. Накопительно за {year} год: терминалы {yearTerminal:N2} ₽ − касса {yearCash:N2} ₽. " +
                     $"На проверке дней: {review}.";
             }
             else
             {
                 accumulatedTitle.Text = "КАССА И ТЕРМИНАЛ СОШЛИСЬ: 0,00 ₽";
                 accumulatedDetails.Text =
-                    $"{selectedPointName}. Накопительно за всё время: терминалы {allTimeTerminal:N2} ₽, касса {allTimeCash:N2} ₽. " +
+                    $"{selectedPointName}. Накопительно за {year} год: терминалы {yearTerminal:N2} ₽, касса {yearCash:N2} ₽. " +
                     $"На проверке дней: {review}.";
             }
         }
@@ -363,9 +365,9 @@ public partial class MainWindow
         };
         if (dialog.ShowDialog(this) != true) return;
 
-        var allTimeTerminal = Money.Normalize(allTimeDays.Sum(x => x.BankElectronic ?? 0m));
-        var allTimeCash = Money.Normalize(allTimeDays.Sum(x => x.CashElectronic ?? 0m));
-        var allTimeBalance = Money.Normalize(allTimeTerminal - allTimeCash);
+        var yearTerminal = Money.Normalize(allTimeDays.Sum(x => x.BankElectronic ?? 0m));
+        var yearCash = Money.Normalize(allTimeDays.Sum(x => x.CashElectronic ?? 0m));
+        var allTimeBalance = Money.Normalize(yearTerminal - yearCash);
         var action = allTimeBalance > 0m
             ? $"Надо пробить {allTimeBalance:N2} ₽"
             : allTimeBalance < 0m
@@ -388,11 +390,11 @@ public partial class MainWindow
             ExcelTextRow($"Период выгрузки: {period}"),
             ExcelTextRow($"Точка: {locationName}"),
             new Row(),
-            ExcelLabelMoneyRow("Терминалы за всё время", allTimeTerminal),
-            ExcelLabelMoneyRow("Касса безнал за всё время", allTimeCash),
-            ExcelLabelMoneyRow("Накопительно недопробито", allTimeBalance),
+            ExcelLabelMoneyRow("Терминалы за выбранный год", yearTerminal),
+            ExcelLabelMoneyRow("Касса безнал за выбранный год", yearCash),
+            ExcelLabelMoneyRow("Накопительно с начала года", allTimeBalance),
             ExcelTextRow($"Итог: {action}", 1),
-            ExcelTextRow($"Дней на проверке за всё время: {allTimeDays.Count(x => x.RequiresReview)}")
+            ExcelTextRow($"Дней на проверке за выбранный год: {allTimeDays.Count(x => x.RequiresReview)}")
         };
         AddReconciliationSheet(
             workbookPart,
@@ -409,7 +411,7 @@ public partial class MainWindow
         foreach (var header in new[]
         {
             "Дата", "Точка", "Терминалы", "Касса безнал", "Разница за день",
-            "Накопительно недопробито", "Что делать", "FIFO остаток", "Статус", "Закрытие смены", "№ смены"
+            "Накопительно с начала года", "Что делать", "Статус", "Закрытие смены", "№ смены"
         })
             dailyHeader.Append(ExcelTextCell(header, 1));
         dailySheetRows.Add(dailyHeader);
@@ -424,7 +426,6 @@ public partial class MainWindow
             excelRow.Append(ExcelMoneyCell(row.DayDifference));
             excelRow.Append(ExcelMoneyCell(row.AccumulatedBalance));
             excelRow.Append(ExcelTextCell(row.AccumulatedAction));
-            excelRow.Append(ExcelMoneyCell(row.TotalRemaining));
             excelRow.Append(ExcelTextCell(row.Status));
             excelRow.Append(ExcelTextCell(row.ClosedAt));
             excelRow.Append(ExcelTextCell(row.Shift));
@@ -441,9 +442,8 @@ public partial class MainWindow
                 new Column { Min = 2, Max = 2, Width = 30, CustomWidth = true },
                 new Column { Min = 3, Max = 6, Width = 19, CustomWidth = true },
                 new Column { Min = 7, Max = 7, Width = 24, CustomWidth = true },
-                new Column { Min = 8, Max = 8, Width = 17, CustomWidth = true },
-                new Column { Min = 9, Max = 9, Width = 40, CustomWidth = true },
-                new Column { Min = 10, Max = 11, Width = 20, CustomWidth = true }),
+                new Column { Min = 8, Max = 8, Width = 40, CustomWidth = true },
+                new Column { Min = 9, Max = 10, Width = 20, CustomWidth = true }),
             dailySheetRows);
 
         var monthlySheetRows = new List<Row>();
@@ -451,7 +451,7 @@ public partial class MainWindow
         foreach (var header in new[]
         {
             "Месяц", "Точка", "Терминалы", "Касса безнал", "Разница месяца",
-            "Накопительно недопробито", "Что делать", "Дней на проверке"
+            "Накопительно с начала года", "Что делать", "Дней на проверке"
         })
             monthlyHeader.Append(ExcelTextCell(header, 1));
         monthlySheetRows.Add(monthlyHeader);
