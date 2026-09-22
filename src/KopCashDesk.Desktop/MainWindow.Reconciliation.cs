@@ -338,7 +338,7 @@ public partial class MainWindow
         new Fills(
             new Fill(new PatternFill { PatternType = PatternValues.None }),
             new Fill(new PatternFill { PatternType = PatternValues.Gray125 })),
-        new Borders(new Border()),
+        new Borders(new DocumentFormat.OpenXml.Spreadsheet.Border()),
         new CellStyleFormats(new CellFormat()),
         new CellFormats(
             new CellFormat(),
