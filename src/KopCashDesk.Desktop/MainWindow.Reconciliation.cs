@@ -1,5 +1,9 @@
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Spreadsheet;
 using KopCashDesk.Core;
 using KopCashDesk.Data;
+using Microsoft.Win32;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
@@ -23,6 +27,7 @@ public partial class MainWindow
         public decimal ClosedLater => Day.ClosedLater;
         public decimal DayRemaining => Day.DayRemaining;
         public decimal TotalRemaining => Day.CumulativeOutstanding;
+        public decimal AccumulatedBalance => AccumulatedNeedToPunch;
         public string AccumulatedAction => AccumulatedNeedToPunch > 0m
             ? $"Пробить {AccumulatedNeedToPunch:N2} ₽"
             : AccumulatedNeedToPunch < 0m
@@ -76,6 +81,12 @@ public partial class MainWindow
         filters.Children.Add(monthBox);
         filters.Children.Add(new TextBlock { Text = "Точка:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 7, 0) });
         filters.Children.Add(locationBox);
+        var exportButton = new Button
+        {
+            Content = "Выгрузить Excel",
+            Padding = new Thickness(12, 5, 12, 5)
+        };
+        filters.Children.Add(exportButton);
         root.Children.Add(filters);
 
         var totals = new TextBlock { FontSize = 15, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 14), TextWrapping = TextWrapping.Wrap };
@@ -106,6 +117,9 @@ public partial class MainWindow
         grid.Columns.Add(ReconciliationTextColumn("№ смены", "Shift", 95));
         Grid.SetRow(grid, 2);
         root.Children.Add(grid);
+
+        ReconciliationRow[] currentRows = [];
+        ReconciliationDay[] currentAllTimeDays = [];
 
         void RefreshRows()
         {
@@ -146,6 +160,8 @@ public partial class MainWindow
             var rows = days
                 .Select(x => new ReconciliationRow(x, accumulatedByDay.GetValueOrDefault((x.LocationId, x.Date))))
                 .ToArray();
+            currentRows = rows;
+            currentAllTimeDays = allTimeDays;
             grid.ItemsSource = rows;
 
             var terminalKnown = days.Where(x => x.BankElectronic is not null).Select(x => x.BankElectronic!.Value).ToArray();
@@ -178,6 +194,14 @@ public partial class MainWindow
                 $"Дней без кассовых данных: {missingCash}     •     Требует проверки: {review}";
         }
 
+        exportButton.Click += (_, _) =>
+        {
+            if (yearBox.SelectedItem is not int selectedYear) return;
+            var selectedMonth = (monthBox.SelectedItem as ReconciliationMonthOption)?.Number;
+            var selectedLocation = locationBox.SelectedItem as ReconciliationLocationOption;
+            ExportReconciliationExcel(currentRows, currentAllTimeDays, selectedYear, selectedMonth, selectedLocation?.Name ?? "Все точки");
+        };
+
         yearBox.SelectionChanged += (_, _) => RefreshRows();
         monthBox.SelectionChanged += (_, _) => RefreshRows();
         locationBox.SelectionChanged += (_, _) => RefreshRows();
@@ -195,6 +219,166 @@ public partial class MainWindow
 
         RefreshRows();
         return root;
+    }
+
+    private void ExportReconciliationExcel(
+        IReadOnlyList<ReconciliationRow> rows,
+        IReadOnlyList<ReconciliationDay> allTimeDays,
+        int year,
+        int? month,
+        string locationName)
+    {
+        if (rows.Count == 0)
+        {
+            MessageBox.Show(this, "За выбранный период нет строк для выгрузки.", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var culture = CultureInfo.GetCultureInfo("ru-RU");
+        var period = month is int m
+            ? $"{culture.DateTimeFormat.GetMonthName(m)} {year}"
+            : $"весь {year} год";
+        var safePoint = string.Concat(locationName.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
+        var dialog = new SaveFileDialog
+        {
+            Title = "Выгрузить сверку в Excel",
+            Filter = "Excel (*.xlsx)|*.xlsx",
+            FileName = $"Сверка_{safePoint}_{year}{(month is int selectedMonth ? $"-{selectedMonth:00}" : "")}.xlsx",
+            AddExtension = true,
+            DefaultExt = ".xlsx"
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        var allTimeTerminal = allTimeDays.Sum(x => x.BankElectronic ?? 0m);
+        var allTimeCash = allTimeDays.Sum(x => x.CashElectronic ?? 0m);
+        var allTimeBalance = Money.Normalize(allTimeTerminal - allTimeCash);
+        var action = allTimeBalance > 0m
+            ? $"Надо пробить {allTimeBalance:N2} ₽"
+            : allTimeBalance < 0m
+                ? $"Перебито {Math.Abs(allTimeBalance):N2} ₽"
+                : "Сошлось 0,00 ₽";
+
+        using var document = SpreadsheetDocument.Create(dialog.FileName, SpreadsheetDocumentType.Workbook);
+        var workbookPart = document.AddWorkbookPart();
+        workbookPart.Workbook = new Workbook();
+
+        var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
+        stylesPart.Stylesheet = BuildReconciliationStyles();
+        stylesPart.Stylesheet.Save();
+
+        var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+        var columns = new Columns(
+            new Column { Min = 1, Max = 1, Width = 13, CustomWidth = true },
+            new Column { Min = 2, Max = 2, Width = 28, CustomWidth = true },
+            new Column { Min = 3, Max = 10, Width = 16, CustomWidth = true },
+            new Column { Min = 11, Max = 11, Width = 23, CustomWidth = true },
+            new Column { Min = 12, Max = 12, Width = 38, CustomWidth = true },
+            new Column { Min = 13, Max = 14, Width = 20, CustomWidth = true });
+        var sheetData = new SheetData();
+        worksheetPart.Worksheet = new Worksheet(columns, sheetData);
+
+        sheetData.Append(ExcelTextRow("Сверка касса ↔ терминал", 1));
+        sheetData.Append(ExcelTextRow($"Период: {period}"));
+        sheetData.Append(ExcelTextRow($"Точка: {locationName}"));
+        sheetData.Append(ExcelMixedRow(
+            ("Терминалы за всё время", allTimeTerminal),
+            ("Касса за всё время", allTimeCash),
+            ("Накопительный баланс", allTimeBalance)));
+        sheetData.Append(ExcelTextRow($"Итог: {action}", 1));
+        sheetData.Append(new Row());
+
+        var headers = new[]
+        {
+            "Дата", "Точка", "Терминалы", "Касса безнал", "Непробито ранее", "Погашено кассой",
+            "Пробито позже", "Остаток за день", "Общий FIFO остаток", "Накопительный баланс",
+            "Действие", "Статус", "Закрытие смены", "№ смены"
+        };
+        var headerRow = new Row();
+        foreach (var header in headers) headerRow.Append(ExcelTextCell(header, 1));
+        sheetData.Append(headerRow);
+
+        foreach (var row in rows)
+        {
+            var excelRow = new Row();
+            excelRow.Append(ExcelTextCell(row.Date));
+            excelRow.Append(ExcelTextCell(row.Point));
+            excelRow.Append(ExcelMoneyCell(row.Terminal));
+            excelRow.Append(ExcelMoneyCell(row.Cash));
+            excelRow.Append(ExcelMoneyCell(row.Prior));
+            excelRow.Append(ExcelMoneyCell(row.CashApplied));
+            excelRow.Append(ExcelMoneyCell(row.ClosedLater));
+            excelRow.Append(ExcelMoneyCell(row.DayRemaining));
+            excelRow.Append(ExcelMoneyCell(row.TotalRemaining));
+            excelRow.Append(ExcelMoneyCell(row.AccumulatedBalance));
+            excelRow.Append(ExcelTextCell(row.AccumulatedAction));
+            excelRow.Append(ExcelTextCell(row.Status));
+            excelRow.Append(ExcelTextCell(row.ClosedAt));
+            excelRow.Append(ExcelTextCell(row.Shift));
+            sheetData.Append(excelRow);
+        }
+
+        var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+        sheets.Append(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(worksheetPart),
+            SheetId = 1,
+            Name = "Сверка"
+        });
+        worksheetPart.Worksheet.Save();
+        workbookPart.Workbook.Save();
+
+        StatusText.Text = $"Excel сохранён: {dialog.FileName}";
+        MessageBox.Show(this, $"Excel-файл сохранён.\n\n{dialog.FileName}", "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private static Stylesheet BuildReconciliationStyles() => new(
+        new Fonts(
+            new Font(),
+            new Font(new Bold())),
+        new Fills(
+            new Fill(new PatternFill { PatternType = PatternValues.None }),
+            new Fill(new PatternFill { PatternType = PatternValues.Gray125 })),
+        new Borders(new Border()),
+        new CellStyleFormats(new CellFormat()),
+        new CellFormats(
+            new CellFormat(),
+            new CellFormat { FontId = 1, ApplyFont = true },
+            new CellFormat { NumberFormatId = 4, ApplyNumberFormat = true }));
+
+    private static Row ExcelTextRow(string text, uint styleIndex = 0)
+    {
+        var row = new Row();
+        row.Append(ExcelTextCell(text, styleIndex));
+        return row;
+    }
+
+    private static Row ExcelMixedRow(params (string Label, decimal Value)[] values)
+    {
+        var row = new Row();
+        foreach (var item in values)
+        {
+            row.Append(ExcelTextCell(item.Label, 1));
+            row.Append(ExcelMoneyCell(item.Value));
+        }
+        return row;
+    }
+
+    private static Cell ExcelTextCell(string? value, uint styleIndex = 0) => new()
+    {
+        DataType = CellValues.InlineString,
+        StyleIndex = styleIndex,
+        InlineString = new InlineString(new Text(value ?? string.Empty))
+    };
+
+    private static Cell ExcelMoneyCell(decimal? value)
+    {
+        if (value is null) return ExcelTextCell("—");
+        return new Cell
+        {
+            DataType = CellValues.Number,
+            StyleIndex = 2,
+            CellValue = new CellValue(value.Value.ToString(CultureInfo.InvariantCulture))
+        };
     }
 
     private void ShowReconciliationExplanation(ReconciliationDay day)
