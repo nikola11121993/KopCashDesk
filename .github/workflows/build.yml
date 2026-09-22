@@ -81,8 +81,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Version is missing in KopCashDesk.Desktop.csproj' }
           $tag = "v$version-preview"
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $title = "КОП Кассы $version — суммы по выделенным месяцам"
-          $notes = "Версия $version. Вкладка «По месяцам» теперь поддерживает множественное выделение: Shift для диапазона и Ctrl для выборочных месяцев. Над таблицей сразу показываются суммы терминалов, кассы, разница и итог «надо пробить / перебито / сошлось» только по выделенным месяцам. Годовая сверка по-прежнему изолирована от прошлых лет. Commit: $env:GITHUB_SHA"
+          $title = "КОП Кассы $version — исправление июня Frontol"
+          $notes = "Версия $version. Исправлена сверка конфликтных кассовых источников: конфликтная дата больше не превращается в ноль. Для суммы кассы используется прямой Frontol report.txt, а день сохраняет отметку «требует проверки». Это возвращает в июнь пропущенные смены 01–09.06. Годовая и помесячная сверка, выделение месяцев и Excel сохранены. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $asset --title $title --notes $notes --prerelease --target $env:GITHUB_SHA
