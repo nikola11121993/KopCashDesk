@@ -81,8 +81,8 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Version is missing in KopCashDesk.Desktop.csproj' }
           $tag = "v$version-preview"
           $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $title = "КОП Кассы $version — счетчик перепробития ГРЭС"
-          $notes = "Версия $version. В своде убрана перегруженная верхняя строка. Для Рефтинской ГРЭС 6 с 09.09.2026 работает отдельный счетчик: стартовое перепробитие 634 022 ₽, новые терминальные оплаты уменьшают остаток, новые суммы кассы увеличивают его. Верх показывает только кассу безнал, терминал безнал и текущий остаток. Commit: $env:GITHUB_SHA"
+          $title = "КОП Кассы $version — защита от дублей Сбер"
+          $notes = "Версия $version. Исправлено удвоение терминала при повторной загрузке пересекающихся отчетов Сбер. Программа очищает уже накопившиеся дубли между разными выгрузками и использует более стабильный идентификатор операции по RRN, поэтому повторная выгрузка того же периода больше не должна удваивать суммы. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $asset --title $title --notes $notes --prerelease --target $env:GITHUB_SHA
