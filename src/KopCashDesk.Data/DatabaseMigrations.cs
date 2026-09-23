@@ -33,6 +33,7 @@ internal static class DatabaseMigrations
         // Data-only business rules are intentionally idempotent and remain outside the schema version.
         // This lets an already-v4 database receive corrected hard KKT bindings without rebuilding tables.
         KnownBusinessRules.ApplyPending(database);
+        database.RepairSberOverlappingImports();
     }
 
     private static void MigrateToV2(SqliteConnection db)
