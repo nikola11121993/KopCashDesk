@@ -72,7 +72,15 @@ public sealed class SberAcquiringImporter
             }
         }
 
-        _database.Audit("sber.import", $"files={summary.FilesProcessed}; sheets={summary.SheetsProcessed}; rows={summary.RowsRead}; added={summary.OperationsAdded}; duplicates={summary.DuplicatesIgnored}; skipped={summary.RowsSkipped}; failed={summary.FilesFailed}");
+        var repairedDuplicates = _database.RepairSberOverlappingImports();
+        if (repairedDuplicates > 0)
+        {
+            summary.DuplicatesIgnored += repairedDuplicates;
+            summary.OperationsAdded = Math.Max(0, summary.OperationsAdded - repairedDuplicates);
+            summary.Messages.Add($"Удалено дублей из пересекающихся отчётов Сбер: {repairedDuplicates}.");
+        }
+
+        _database.Audit("sber.import", $"files={summary.FilesProcessed}; sheets={summary.SheetsProcessed}; rows={summary.RowsRead}; added={summary.OperationsAdded}; duplicates={summary.DuplicatesIgnored}; skipped={summary.RowsSkipped}; failed={summary.FilesFailed}; repaired={repairedDuplicates}");
         return summary;
     }
 
@@ -467,7 +475,21 @@ public sealed class SberAcquiringImporter
 
     private static string BuildExternalId(string taxId, string terminalId, string merchantId, string rrn, DateTimeOffset occurredAt, decimal amount, string requestNumber, string extraTransactionId)
     {
-        var canonical = string.Join("|", taxId, terminalId, merchantId, rrn, occurredAt.ToString("O", CultureInfo.InvariantCulture), Money.ToKopecks(amount), requestNumber.Trim(), extraTransactionId.Trim());
+        // RRN is the stable bank reference. Request/extra fields may change between
+        // overlapping Sber exports of the same operation, so they must not make
+        // the same payment look like a new transaction.
+        var stableReference = !string.IsNullOrWhiteSpace(rrn)
+            ? $"rrn:{rrn.Trim()}"
+            : $"fallback:{merchantId}|{requestNumber.Trim()}|{extraTransactionId.Trim()}";
+
+        var canonical = string.Join(
+            "|",
+            taxId,
+            terminalId,
+            stableReference,
+            occurredAt.ToString("O", CultureInfo.InvariantCulture),
+            Money.ToKopecks(amount));
+
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
