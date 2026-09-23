@@ -8,10 +8,20 @@ namespace KopCashDesk.Desktop;
 
 public partial class MainWindow
 {
+    private static readonly DateOnly Gres6OverageStartDate = new(2026, 9, 9);
+    private const decimal Gres6InitialOverage = 634022m;
+
+    private static bool IsGres6CorrectionPoint(string name)
+    {
+        var key = new string(name.ToLowerInvariant().Replace('ё', 'е').Where(char.IsLetterOrDigit).ToArray());
+        return key.Contains("рефтинскаягрэс6", StringComparison.Ordinal) ||
+               key.Contains("рефтинскаягрэс6столовая", StringComparison.Ordinal);
+    }
+
     private UIElement RenderSummaryV051()
     {
         PageTitle.Text = "Свод по точкам";
-        PageSubtitle.Text = "Терминалы, касса, закрытия смен и ручные корректировки";
+        PageSubtitle.Text = "Касса безнал • терминал безнал • текущий остаток";
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -291,16 +301,92 @@ public partial class MainWindow
                 .OrderByDescending(x => x.Year).ThenByDescending(x => x.Month).ThenBy(x => x.Point).ToArray();
             monthlyGrid.ItemsSource = monthRows;
 
-            var bankTotal = SumNullable(dayRows.Select(x => x.Sber));
-            var cashTotal = SumNullable(dayRows.Select(x => x.CashElectronic));
-            var shiftGrandTotal = SumNullable(dayRows.Select(x => x.ShiftTotal));
-            var incompleteDays = dayRows.Count(x => (x.Sber is null) != (x.CashElectronic is null));
-            var conflictDays = dayRows.Count(x => x.Status.Contains("Конфликт кассовых источников", StringComparison.OrdinalIgnoreCase));
-            var manualDays = manualCash.Keys.Concat(manualTerminal.Keys).Distinct().Count();
-            totals.Text = $"Терминал за период: {MoneyText(bankTotal)}     •     Касса безнал: {MoneyText(cashTotal)}     •     Закрыто сменами: {MoneyText(shiftGrandTotal)}" +
-                          (manualDays > 0 ? $"     •     Ручных дней: {manualDays}" : "") +
-                          (incompleteDays > 0 ? $"     •     Неполных дней: {incompleteDays}" : "") +
-                          (conflictDays > 0 ? $"     •     Конфликтов источников: {conflictDays}" : "");
+            // Верхняя строка не зависит от выбранного месяца: это рабочий накопительный итог за 2026 год.
+            // Для ГРЭС-6 действует подтверждённая пользователем контрольная точка:
+            // с 09.09.2026 кассу не пробивают, стартовое перепробитие = 634 022 ₽,
+            // новые терминальные оплаты постепенно гасят этот остаток.
+            var selectedLocation = locationId is Guid selectedLocationId
+                ? _locations.FirstOrDefault(x => x.Id == selectedLocationId)
+                : null;
+
+            if (selectedLocation is not null && IsGres6CorrectionPoint(selectedLocation.Name))
+            {
+                var trackerRowsSource = _db.CanonicalPointDaySummaries(
+                    SelectedOrganizationId,
+                    2026,
+                    null,
+                    selectedLocation.Id);
+                var trackerManualCash = _db.ManualCashPostings(
+                        SelectedOrganizationId,
+                        2026,
+                        null,
+                        selectedLocation.Id)
+                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
+                var trackerManualTerminal = _db.ManualTerminalPostings(
+                        SelectedOrganizationId,
+                        2026,
+                        null,
+                        selectedLocation.Id)
+                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
+
+                var trackerRows = trackerRowsSource
+                    .Select(x => ToDayRowV051(x, trackerManualCash, trackerManualTerminal))
+                    .Where(x => x.DateValue >= Gres6OverageStartDate)
+                    .ToArray();
+
+                var terminalSinceStart = Money.Normalize(trackerRows.Sum(x => x.Sber ?? 0m));
+                var cashSinceStart = Money.Normalize(trackerRows.Sum(x => x.CashElectronic ?? 0m));
+                var remainingOverage = Money.Normalize(Gres6InitialOverage + cashSinceStart - terminalSinceStart);
+
+                var state = remainingOverage > 0m
+                    ? $"ПЕРЕБИТО: {remainingOverage:N2} ₽"
+                    : remainingOverage < 0m
+                        ? $"НАДО ПРОБИТЬ: {Math.Abs(remainingOverage):N2} ₽"
+                        : "СОШЛОСЬ: 0,00 ₽";
+
+                totals.Text =
+                    $"Касса безнал: {cashSinceStart:N2} ₽     •     " +
+                    $"Терминал безнал: {terminalSinceStart:N2} ₽     •     " +
+                    state;
+            }
+            else
+            {
+                var totalRowsSource = _db.CanonicalPointDaySummaries(
+                    SelectedOrganizationId,
+                    2026,
+                    null,
+                    locationId);
+                var totalManualCash = _db.ManualCashPostings(
+                        SelectedOrganizationId,
+                        2026,
+                        null,
+                        locationId)
+                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
+                var totalManualTerminal = _db.ManualTerminalPostings(
+                        SelectedOrganizationId,
+                        2026,
+                        null,
+                        locationId)
+                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
+
+                var totalRows = totalRowsSource
+                    .Select(x => ToDayRowV051(x, totalManualCash, totalManualTerminal))
+                    .ToArray();
+
+                var terminalTotal = Money.Normalize(totalRows.Sum(x => x.Sber ?? 0m));
+                var cashTotal = Money.Normalize(totalRows.Sum(x => x.CashElectronic ?? 0m));
+                var balance = Money.Normalize(cashTotal - terminalTotal);
+                var state = balance > 0m
+                    ? $"ПЕРЕБИТО: {balance:N2} ₽"
+                    : balance < 0m
+                        ? $"НАДО ПРОБИТЬ: {Math.Abs(balance):N2} ₽"
+                        : "СОШЛОСЬ: 0,00 ₽";
+
+                totals.Text =
+                    $"Касса безнал: {cashTotal:N2} ₽     •     " +
+                    $"Терминал безнал: {terminalTotal:N2} ₽     •     " +
+                    state;
+            }
         }
 
         yearBox.SelectionChanged += (_, _) => RefreshData();
