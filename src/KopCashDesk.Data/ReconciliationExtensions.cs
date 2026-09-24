@@ -85,7 +85,6 @@ public static class ReconciliationExtensions
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
-        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
         var result = new List<ReconciliationAllocation>();
         while (reader.Read())
