@@ -147,6 +147,21 @@ public static class CrossSourceShiftExtensions
             }
         }
 
+        // Avoid delete/reinsert churn when the raw shifts have not changed.
+        // On a large database this path is hit every time the summary is rendered.
+        var desiredMatchIds = desiredMatches
+            .Select(x => DeterministicGuid($"match|{x.Taxcom.Id}|{x.Frontol.Id}").ToString())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var desiredConflictIds = desiredConflicts
+            .Select(x => DeterministicGuid($"conflict|{x.Taxcom.Id}|{x.Frontol.Id}").ToString())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (desiredMatchIds.SetEquals(existingMatchCreated.Keys) &&
+            desiredConflictIds.SetEquals(existingConflictCreated.Keys))
+        {
+            tx.Commit();
+            return new(desiredMatches.Count, 0, desiredConflicts.Count, 0);
+        }
+
         // Rebuild only automatic relationships. Raw source rows are never deleted.
         Execute(db, tx, $"DELETE FROM shift_source_links WHERE match_kind='{AutomaticMatchKind}'");
         Execute(db, tx, $"DELETE FROM fiscal_source_conflicts WHERE reason='{AutomaticConflictReason}'");
