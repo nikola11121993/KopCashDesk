@@ -4,7 +4,7 @@ namespace KopCashDesk.Data;
 
 internal static class DatabaseMigrations
 {
-    public const long CurrentVersion = 4;
+    public const long CurrentVersion = 5;
 
     public static void Apply(Database database)
     {
@@ -29,6 +29,15 @@ internal static class DatabaseMigrations
             MigrateToV3(db);
         if (version < 4)
             RegisterSchemaMigration.Apply(db);
+        if (version < 5)
+            MigrateToV5(db);
+
+        // Refresh SQLite planner statistics after schema/index changes.
+        using (var optimize = db.CreateCommand())
+        {
+            optimize.CommandText = "PRAGMA optimize;";
+            optimize.ExecuteNonQuery();
+        }
 
         // Data-only business rules are intentionally idempotent and remain outside the schema version.
         // This lets an already-v4 database receive corrected hard KKT bindings without rebuilding tables.
@@ -181,6 +190,50 @@ internal static class DatabaseMigrations
         {
             audit.Transaction = tx;
             audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','2 -> 3: cross-source fiscal shift links and conflicts')";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void MigrateToV5(SqliteConnection db)
+    {
+        using var tx = db.BeginTransaction();
+
+        // Large databases spend most of their time grouping ISO-8601 timestamps by day
+        // and resolving source/external-id pairs. Expression/covering indexes avoid full scans
+        // without changing the existing data model or deleting historical rows.
+        Execute(db, tx, """
+            CREATE INDEX IF NOT EXISTS ix_operations_day_summary
+                ON operations(organization_id, location_id, substr(occurred_at,1,10), source_kind, payment, amount_kopecks);
+            CREATE INDEX IF NOT EXISTS ix_operations_source_external_role
+                ON operations(source, external_id, source_kind);
+            CREATE INDEX IF NOT EXISTS ix_operations_location_time
+                ON operations(organization_id, location_id, occurred_at);
+
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_day_summary
+                ON shift_closures(organization_id, location_id, substr(closed_at,1,10), source);
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_source_external
+                ON shift_closures(source, external_id);
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_register_match
+                ON shift_closures(organization_id, location_id, source, fn, shift_number, closed_at);
+
+            CREATE INDEX IF NOT EXISTS ix_source_documents_hash
+                ON source_documents(sha256);
+            """);
+
+        using (var version = db.CreateCommand())
+        {
+            version.Transaction = tx;
+            version.CommandText = "UPDATE schema_version SET version=5";
+            version.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','4 -> 5: large database indexes')";
             audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
             audit.ExecuteNonQuery();
         }
