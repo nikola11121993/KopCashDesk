@@ -28,9 +28,12 @@ public partial class MainWindow
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        var allRows = _db.CanonicalPointDaySummaries(SelectedOrganizationId);
-        var years = allRows.Select(x => x.Date.Year).Distinct().OrderByDescending(x => x).ToList();
-        if (years.Count == 0) years.Add(DateTime.Today.Year);
+        // Do not build the full summary just to populate the year filter.
+        // The application currently works with data starting from 2026.
+        var currentYear = DateTime.Today.Year;
+        var years = Enumerable.Range(2026, Math.Max(1, currentYear - 2026 + 1))
+            .OrderByDescending(x => x)
+            .ToList();
 
         var yearBox = new ComboBox { Width = 105, ItemsSource = years, SelectedItem = years[0], Margin = new Thickness(0, 0, 12, 0) };
         var culture = CultureInfo.GetCultureInfo("ru-RU");
