@@ -642,6 +642,15 @@ public static class ReconciliationExtensions
             ForeignKeys = true
         }.ToString());
         connection.Open();
+        using (var pragmas = connection.CreateCommand())
+        {
+            pragmas.CommandText = """
+                PRAGMA busy_timeout=5000;
+                PRAGMA temp_store=MEMORY;
+                PRAGMA cache_size=-32768;
+                """;
+            pragmas.ExecuteNonQuery();
+        }
         return connection;
     }
 
