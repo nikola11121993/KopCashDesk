@@ -85,6 +85,7 @@ public static class ReconciliationExtensions
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
         var result = new List<ReconciliationAllocation>();
         while (reader.Read())
@@ -410,6 +411,7 @@ public static class ReconciliationExtensions
                 """;
             command.Parameters.AddWithValue("$org", organizationId.ToString());
             command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -429,6 +431,7 @@ public static class ReconciliationExtensions
                 """;
             command.Parameters.AddWithValue("$org", organizationId.ToString());
             command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -452,6 +455,7 @@ public static class ReconciliationExtensions
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
         var result = new List<CashEvent>();
         while (reader.Read())
@@ -463,7 +467,8 @@ public static class ReconciliationExtensions
         SqliteConnection db,
         SqliteTransaction tx,
         Guid organizationId,
-        Guid locationId)
+        Guid locationId,
+        int? year)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
@@ -479,6 +484,7 @@ public static class ReconciliationExtensions
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
 
         var result = new List<CashEvent>();
@@ -504,6 +510,7 @@ public static class ReconciliationExtensions
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
         var result = new List<CashEvent>();
         while (reader.Read())
@@ -526,6 +533,7 @@ public static class ReconciliationExtensions
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
         var rows = new List<(DateTimeOffset ClosedAt, int? Number)>();
         while (reader.Read())
@@ -605,6 +613,7 @@ public static class ReconciliationExtensions
             command.Parameters.AddWithValue("$id", item.Id);
             command.Parameters.AddWithValue("$org", organizationId.ToString());
             command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$terminal", allocation.TerminalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$kind", allocation.Kind.ToString());
             command.Parameters.AddWithValue("$source", allocation.SettlementSource);
