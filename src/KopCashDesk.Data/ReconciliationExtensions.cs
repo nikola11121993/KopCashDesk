@@ -114,21 +114,11 @@ public static class ReconciliationExtensions
         using var db = Open(database);
         using var transaction = db.BeginTransaction();
 
-        var bankDays = ReadBankDays(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-        var fiscalEvents = ReadFiscalEvents(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-        var frontolConflictFallbackEvents = ReadFrontolConflictFallbackEvents(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-        var manualEvents = ReadManualEvents(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-        var shifts = ReadShiftMeta(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
+        var bankDays = ReadBankDays(db, transaction, organization.Id, location.Id, year);
+        var fiscalEvents = ReadFiscalEvents(db, transaction, organization.Id, location.Id, year);
+        var frontolConflictFallbackEvents = ReadFrontolConflictFallbackEvents(db, transaction, organization.Id, location.Id, year);
+        var manualEvents = ReadManualEvents(db, transaction, organization.Id, location.Id, year);
+        var shifts = ReadShiftMeta(db, transaction, organization.Id, location.Id, year);
 
         var conflicts = database.CrossSourceConflictDates(organization.Id, location.Id)
             .Where(x => year is null || x.Year == year)
@@ -404,7 +394,7 @@ public static class ReconciliationExtensions
         return "Нет данных";
     }
 
-    private static List<BankDay> ReadBankDays(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
+    private static List<BankDay> ReadBankDays(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, int? year)
     {
         var result = new Dictionary<DateOnly, BankDay>();
 
@@ -414,7 +404,7 @@ public static class ReconciliationExtensions
             command.CommandText = """
                 SELECT substr(occurred_at,1,10),SUM(amount_kopecks),COUNT(*)
                 FROM operations
-                WHERE organization_id=$org AND location_id=$loc AND source_kind='Bank' AND payment='Electronic'
+                WHERE organization_id=$org AND location_id=$loc AND source_kind='Bank' AND payment='Electronic' AND ($year IS NULL OR substr(occurred_at,1,4)=$year)
                 GROUP BY substr(occurred_at,1,10)
                 ORDER BY substr(occurred_at,1,10)
                 """;
@@ -434,7 +424,7 @@ public static class ReconciliationExtensions
             command.CommandText = """
                 SELECT business_date,electronic_kopecks
                 FROM manual_terminal_postings
-                WHERE organization_id=$org AND location_id=$loc
+                WHERE organization_id=$org AND location_id=$loc AND ($year IS NULL OR substr(business_date,1,4)=$year)
                 ORDER BY business_date
                 """;
             command.Parameters.AddWithValue("$org", organizationId.ToString());
@@ -450,14 +440,14 @@ public static class ReconciliationExtensions
         return result.Values.OrderBy(x => x.Date).ToList();
     }
 
-    private static List<CashEvent> ReadFiscalEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
+    private static List<CashEvent> ReadFiscalEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, int? year)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             SELECT substr(occurred_at,1,10),source,external_id,amount_kopecks,occurred_at
             FROM canonical_fiscal_operations
-            WHERE organization_id=$org AND location_id=$loc AND payment='Electronic'
+            WHERE organization_id=$org AND location_id=$loc AND payment='Electronic' AND ($year IS NULL OR substr(occurred_at,1,4)=$year)
             ORDER BY occurred_at,source,external_id
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
@@ -484,7 +474,7 @@ public static class ReconciliationExtensions
               AND location_id=$loc
               AND source='Frontol.Report'
               AND source_kind='FiscalConflict'
-              AND payment='Electronic'
+              AND payment='Electronic' AND ($year IS NULL OR substr(occurred_at,1,4)=$year)
             ORDER BY occurred_at,external_id
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
@@ -502,14 +492,14 @@ public static class ReconciliationExtensions
         return result;
     }
 
-    private static List<CashEvent> ReadManualEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
+    private static List<CashEvent> ReadManualEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, int? year)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             SELECT business_date,electronic_kopecks,updated_at
             FROM manual_cash_postings
-            WHERE organization_id=$org AND location_id=$loc
+            WHERE organization_id=$org AND location_id=$loc AND ($year IS NULL OR substr(business_date,1,4)=$year)
             ORDER BY business_date
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
@@ -524,14 +514,14 @@ public static class ReconciliationExtensions
         return result;
     }
 
-    private static List<ShiftMeta> ReadShiftMeta(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
+    private static List<ShiftMeta> ReadShiftMeta(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, int? year)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             SELECT closed_at,shift_number
             FROM shift_closures
-            WHERE organization_id=$org AND location_id=$loc
+            WHERE organization_id=$org AND location_id=$loc AND ($year IS NULL OR substr(closed_at,1,4)=$year)
             ORDER BY closed_at,shift_number
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
