@@ -100,7 +100,7 @@ public partial class MainWindow : Window
         PageTitle.Text = "Рабочий стол";
         PageSubtitle.Text = "Обзор состояния системы";
         return Stack(
-            Text("КОП Кассы", 23, true),
+            Text("Учет доходов", 23, true),
             Text($"Организаций: {_organizations.Count}    •    Торговых точек: {_locations.Count}    •    Операций: {_db.CountOperations()}"),
             Action("Импортировать архивы Сбер...", SberImport_Click),
             Action("Добавить организацию", (_, _) => EditOrganization(null)),
@@ -171,7 +171,7 @@ public partial class MainWindow : Window
     {
         if (_organizations.Count == 0)
         {
-            MessageBox.Show("Сначала добавьте организацию.", "КОП Кассы");
+            MessageBox.Show("Сначала добавьте организацию.", "Учет доходов");
             return;
         }
         var organization = new ComboBox
@@ -347,7 +347,7 @@ public partial class MainWindow : Window
     private void Settings_Click(object sender, RoutedEventArgs e) => Navigate("settings");
     private void Journal_Click(object sender, RoutedEventArgs e) => Navigate("journal");
     private void Help_Click(object sender, RoutedEventArgs e) => Navigate("help");
-    private void About_Click(object sender, RoutedEventArgs e) => MessageBox.Show(this, "КОП Кассы 0.3.0\nC# / .NET 10 / WPF", "О программе");
+    private void About_Click(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Учет доходов 0.3.0\nC# / .NET 10 / WPF", "О программе");
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshAll();
     private void OrganizationFilter_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (IsLoaded) Render(); }
