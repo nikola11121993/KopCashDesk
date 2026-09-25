@@ -1,4 +1,4 @@
-<Window x:Class="KopCashDesk.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="КОП Кассы — рабочее место" Width="1360" Height="850" MinWidth="980" MinHeight="620" WindowStartupLocation="CenterScreen" Background="#F5F7FA" Loaded="MainWindow_Loaded">
+<Window x:Class="KopCashDesk.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Учет доходов — рабочее место" Width="1360" Height="850" MinWidth="980" MinHeight="620" WindowStartupLocation="CenterScreen" Background="#F5F7FA" Loaded="MainWindow_Loaded">
   <DockPanel>
     <Menu DockPanel.Dock="Top">
       <MenuItem Header="_Файл">
@@ -34,7 +34,7 @@
     <Border DockPanel.Dock="Top" Background="White" BorderBrush="#DCE2E9" BorderThickness="0,0,0,1" Padding="20,12">
       <DockPanel>
         <StackPanel DockPanel.Dock="Left">
-          <TextBlock Text="КОП Кассы" FontSize="23" FontWeight="SemiBold" Foreground="#193B36"/>
+          <TextBlock Text="Учет доходов" FontSize="23" FontWeight="SemiBold" Foreground="#193B36"/>
           <TextBlock Text="Учёт и сверка кассовой выручки" Foreground="#64748B"/>
         </StackPanel>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
