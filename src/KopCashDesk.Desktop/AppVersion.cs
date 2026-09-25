@@ -26,5 +26,5 @@ internal static class AppVersion
 public partial class MainWindow
 {
     private void AboutVNext_Click(object sender, RoutedEventArgs e) =>
-        MessageBox.Show(this, $"КОП Кассы {AppVersion.Current}\nC# / .NET 10 / WPF", "О программе");
+        MessageBox.Show(this, $"Учет доходов {AppVersion.Current}\nC# / .NET 10 / WPF", "О программе");
 }

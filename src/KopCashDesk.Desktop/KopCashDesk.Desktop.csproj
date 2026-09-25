@@ -4,11 +4,11 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <AssemblyName>KopCashDesk</AssemblyName>
+    <AssemblyName>UchetDohodov</AssemblyName>
     <RootNamespace>KopCashDesk.Desktop</RootNamespace>
-    <ApplicationTitle>КОП Кассы</ApplicationTitle>
+    <ApplicationTitle>Учет доходов</ApplicationTitle>
     <ApplicationIcon>Assets\KopCashDesk.ico</ApplicationIcon>
-    <Version>0.5.14</Version>
+    <Version>0.5.15</Version>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets\KopCashDesk.ico" />

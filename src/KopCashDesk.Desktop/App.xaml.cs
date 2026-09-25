@@ -12,7 +12,7 @@ public partial class App : Application
     }
     private static void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        MessageBox.Show("Произошла ошибка. Данные не будут изменены.\n\n" + e.Exception.Message, "КОП Кассы", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show("Произошла ошибка. Данные не будут изменены.\n\n" + e.Exception.Message, "Учет доходов", MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;
     }
 }

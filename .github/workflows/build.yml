@@ -25,17 +25,17 @@ jobs:
       - name: Test
         run: dotnet test tests/KopCashDesk.Tests/KopCashDesk.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=tests.trx"
       - name: Publish Windows x64
-        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=false --output artifacts/KopCashDesk
+        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=false --output artifacts/UchetDohodov
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path artifacts/KopCashDesk/* -DestinationPath artifacts/KopCashDesk-win-x64.zip
+        run: Compress-Archive -Path artifacts/UchetDohodov/* -DestinationPath artifacts/UchetDohodov-win-x64.zip
       - name: Upload portable application
         id: portable
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: KopCashDesk-win-x64
-          path: artifacts/KopCashDesk-win-x64.zip
+          name: UchetDohodov-win-x64
+          path: artifacts/UchetDohodov-win-x64.zip
           if-no-files-found: error
           retention-days: 1
       - name: Upload test results
@@ -67,10 +67,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Publish verified source
-        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=false --output artifacts/KopCashDesk
+        run: dotnet publish src/KopCashDesk.Desktop/KopCashDesk.Desktop.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=false --output artifacts/UchetDohodov
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path artifacts/KopCashDesk/* -DestinationPath artifacts/KopCashDesk-win-x64.zip
+        run: Compress-Archive -Path artifacts/UchetDohodov/* -DestinationPath artifacts/UchetDohodov-win-x64.zip
       - name: Publish preview release
         shell: pwsh
         env:
@@ -80,9 +80,9 @@ jobs:
           $version = [string]($project.Project.PropertyGroup.Version | Select-Object -First 1)
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Version is missing in KopCashDesk.Desktop.csproj' }
           $tag = "v$version-preview"
-          $asset = 'artifacts/KopCashDesk-win-x64.zip'
-          $title = "КОП Кассы $version — защита от дублей Сбер"
-          $notes = "Версия $version. Исправлено удвоение терминала при повторной загрузке пересекающихся отчетов Сбер. Программа очищает уже накопившиеся дубли между разными выгрузками и использует более стабильный идентификатор операции по RRN, поэтому повторная выгрузка того же периода больше не должна удваивать суммы. Commit: $env:GITHUB_SHA"
+          $asset = 'artifacts/UchetDohodov-win-x64.zip'
+          $title = "Учет доходов $version"
+          $notes = "Версия $version. Программа переименована в «Учет доходов». Внутренние пути данных сохранены для совместимости с существующей базой. Commit: $env:GITHUB_SHA"
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag $asset --title $title --notes $notes --prerelease --target $env:GITHUB_SHA
