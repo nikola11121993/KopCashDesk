@@ -96,6 +96,14 @@ public static class RegisterBindingService
         }
         if (selected is not null)
         {
+            if (selected.LocationId is null && selected.BindingSource == BindingSource.Automatic && !selected.IsLocked && !IsGenericPoint(point))
+            {
+                var pointKey = Normalize(point);
+                var matches = locations.Where(l => Normalize(l.Name) == pointKey || (l.Address.Length > 0 && Normalize(l.Address) == pointKey)).ToArray();
+                if (matches.Length == 1)
+                    selected = selected with { LocationId = matches[0].Id };
+            }
+
             // Enrich identity without altering manual provenance/validity. A new FN is a new observation identity.
             if (selected.FiscalDriveNumber.Length > 0 && fn.Length > 0 && selected.FiscalDriveNumber != fn)
                 selected = selected with { Id = Guid.NewGuid(), FiscalDriveNumber = fn, CreatedAt = null, UpdatedAt = null };

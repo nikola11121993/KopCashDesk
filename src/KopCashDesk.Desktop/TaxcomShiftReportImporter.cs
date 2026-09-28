@@ -187,12 +187,11 @@ public sealed class TaxcomShiftReportImporter
         string documentId,
         TaxcomShiftImportSummary summary)
     {
-        var organization = ResolveOrganization(taxId, originalName);
-
         for (var i = headerIndex + 1; i < rows.Count; i++)
         {
             var values = ReadRow(rows[i], headers, sharedStrings);
             if (values.Count == 0) continue;
+            var organization = ResolveOrganization(taxId, originalName, values);
 
             if (!TryParseExcelDate(Get(values, "Дата закрытия"), out var closedAt) ||
                 !TryParseInt(Get(values, "№ смены"), out var shiftNumber))
@@ -219,6 +218,8 @@ public sealed class TaxcomShiftReportImporter
             var serial = DigitsOnly(Get(values, "Зав. № ККТ"));
             var kktName = Get(values, "Название ККТ").Trim();
             var pointName = Get(values, "Торговая точка").Trim();
+            if (string.IsNullOrWhiteSpace(pointName))
+                pointName = kktName;
 
             if (string.IsNullOrWhiteSpace(fn) && string.IsNullOrWhiteSpace(registerNumber) && string.IsNullOrWhiteSpace(serial))
             {
@@ -285,7 +286,7 @@ public sealed class TaxcomShiftReportImporter
         else summary.FiscalOperationsUpdated++;
     }
 
-    private Organization ResolveOrganization(string? taxId, string originalName)
+    private Organization ResolveOrganization(string? taxId, string originalName, IReadOnlyDictionary<string, string>? values = null)
     {
         if (!string.IsNullOrWhiteSpace(taxId))
         {
@@ -293,6 +294,17 @@ public sealed class TaxcomShiftReportImporter
             if (matches.Length == 1) return matches[0];
             if (matches.Length > 1) throw new InvalidDataException($"ИНН {taxId} найден у нескольких организаций.");
             throw new InvalidDataException($"ИНН {taxId} из файла не найден среди организаций программы. Сначала загрузите отчёт Сбер по этой организации или создайте организацию с этим ИНН.");
+        }
+
+        if (values is not null)
+        {
+            var storeName = Get(values, "Название магазина").Trim();
+            if (!string.IsNullOrWhiteSpace(storeName))
+            {
+                var matches = _organizations.Where(x => Normalize(x.Name) == Normalize(storeName)).ToArray();
+                if (matches.Length == 1) return matches[0];
+                if (matches.Length > 1) throw new InvalidDataException($"Организация '{storeName}' найдена несколько раз.");
+            }
         }
 
         if (_fallbackOrganizationId is Guid fallback)
@@ -322,7 +334,7 @@ public sealed class TaxcomShiftReportImporter
         var result = new Dictionary<int, string>();
         foreach (var cell in row.Elements<Cell>())
         {
-            var value = ReadCell(cell, sharedStrings).Trim();
+            var value = CanonicalHeader(ReadCell(cell, sharedStrings));
             if (!string.IsNullOrWhiteSpace(value)) result[ColumnIndex(cell)] = value;
         }
         return result;
@@ -361,6 +373,23 @@ public sealed class TaxcomShiftReportImporter
             index = index * 26 + (char.ToUpperInvariant(ch) - 'A' + 1);
         }
         return Math.Max(0, index - 1);
+    }
+
+    private static string CanonicalHeader(string value)
+    {
+        var normalized = Regex.Replace((value ?? string.Empty).Replace('\u00A0', ' ').Trim(), @"\s+", " ");
+        return normalized.ToLowerInvariant() switch
+        {
+            "дата/время закрытия смены" => "Дата закрытия",
+            "номер смены" => "№ смены",
+            "выручка наличными" => "Выручка нал.",
+            "выручка безналичными" => "Выручка безнал.",
+            "выручка итого" => "Выручка",
+            "название кассы" => "Название ККТ",
+            "номер фн" => "Зав. № ФН",
+            "рнм" => "Рег. № ККТ",
+            _ => normalized
+        };
     }
 
     private static bool HasRequiredHeaders(IEnumerable<string> headers)
