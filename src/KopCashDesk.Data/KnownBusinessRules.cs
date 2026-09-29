@@ -22,6 +22,13 @@ public static class KnownBusinessRules
     public const string GarantDvvsSpareSerial = "00308302622940";
     public const string GarantDvvsSpareRnm = "0009075914046300";
 
+    public const string GarantSredneuralskPointName = "ДК Среднеуральск";
+    public const string GarantSredneuralskAddress = "Свердловская область, г. Среднеуральск, ул. Набережная, 8а";
+    public const string GarantSredneuralskRegisterSerial = "04023212";
+    public const string GarantSredneuralskRnm = "0007852946058578";
+    public const string GarantSredneuralskPosTid = "34771891";
+    public const string GarantSredneuralskQrTid = "34771897";
+
     public static string? PointNameForRegisterSerial(string serial)
     {
         var digits = DigitsOnly(serial);
@@ -33,8 +40,18 @@ public static class KnownBusinessRules
             GarantDvvs1Serial => GarantDvvsPointName,
             GarantDvvs2Serial => GarantDvvsPointName,
             GarantDvvsSpareSerial => GarantDvvsPointName,
+            GarantSredneuralskRegisterSerial => GarantSredneuralskPointName,
             _ => null
         };
+    }
+
+    public static string? PointNameForTerminal(string taxId, string terminalId)
+    {
+        if (DigitsOnly(taxId) != GarantTaxId) return null;
+        var tid = DigitsOnly(terminalId);
+        return tid is GarantSredneuralskPosTid or GarantSredneuralskQrTid
+            ? GarantSredneuralskPointName
+            : null;
     }
 
     public static Location? FindKnownPoint(IEnumerable<Location> locations, string knownPoint)
@@ -63,6 +80,7 @@ public static class KnownBusinessRules
     {
         EnsureRegisterLocationRules(database);
         EnsureGarantDvvsRegisters(database);
+        EnsureGarantSredneuralsk(database);
 
         var applied = 0;
         var backupTaken = false;
@@ -95,7 +113,8 @@ public static class KnownBusinessRules
                 ('ati-appetit','serial',$appetit,$appetitPoint,''),
                 ('garant-dvvs-1','serial',$dvvs1,$dvvsPoint,''),
                 ('garant-dvvs-2','serial',$dvvs2,$dvvsPoint,''),
-                ('garant-dvvs-spare','serial',$dvvsSpare,$dvvsPoint,'')
+                ('garant-dvvs-spare','serial',$dvvsSpare,$dvvsPoint,''),
+                ('garant-sredneuralsk','serial',$sredSerial,$sredPoint,$sredAddress)
             ON CONFLICT(rule_key) DO UPDATE SET
                 identity_kind=excluded.identity_kind,
                 identity_value=excluded.identity_value,
@@ -110,6 +129,9 @@ public static class KnownBusinessRules
         command.Parameters.AddWithValue("$dvvs2", GarantDvvs2Serial);
         command.Parameters.AddWithValue("$dvvsSpare", GarantDvvsSpareSerial);
         command.Parameters.AddWithValue("$dvvsPoint", GarantDvvsPointName);
+        command.Parameters.AddWithValue("$sredSerial", GarantSredneuralskRegisterSerial);
+        command.Parameters.AddWithValue("$sredPoint", GarantSredneuralskPointName);
+        command.Parameters.AddWithValue("$sredAddress", GarantSredneuralskAddress);
         command.ExecuteNonQuery();
         tx.Commit();
     }
@@ -178,6 +200,135 @@ public static class KnownBusinessRules
                 IsLocked = true
             });
         }
+    }
+
+    private static void EnsureGarantSredneuralsk(Database database)
+    {
+        var organization = database.Organizations()
+            .FirstOrDefault(x => DigitsOnly(x.TaxId) == GarantTaxId);
+        if (organization is null) return;
+
+        var locations = database.Locations(true)
+            .Where(x => x.OrganizationId == organization.Id)
+            .ToArray();
+
+        var point = locations.FirstOrDefault(x =>
+                x.IsActive && Normalize(x.Name) == Normalize(GarantSredneuralskPointName))
+            ?? locations.FirstOrDefault(x =>
+                x.IsActive &&
+                Normalize(x.Address).Contains("среднеуральск", StringComparison.Ordinal) &&
+                Normalize(x.Address).Contains("набереж", StringComparison.Ordinal) &&
+                Normalize(x.Address).Contains("8а", StringComparison.Ordinal));
+
+        if (point is null)
+        {
+            point = new Location(
+                Guid.NewGuid(),
+                organization.Id,
+                GarantSredneuralskPointName,
+                GarantSredneuralskAddress);
+            database.Save(point);
+        }
+        else if (Normalize(point.Name) != Normalize(GarantSredneuralskPointName) ||
+                 string.IsNullOrWhiteSpace(point.Address))
+        {
+            point = point with
+            {
+                Name = GarantSredneuralskPointName,
+                Address = string.IsNullOrWhiteSpace(point.Address) ? GarantSredneuralskAddress : point.Address
+            };
+            database.Save(point);
+        }
+
+        using var db = Open(database);
+        using var tx = db.BeginTransaction();
+        var now = DateTimeOffset.UtcNow.ToString("O");
+
+        using (var binding = db.CreateCommand())
+        {
+            binding.Transaction = tx;
+            binding.CommandText = """
+                UPDATE register_bindings
+                SET location_id=$loc,
+                    kkt_serial=$serial,
+                    register_number=$rnm,
+                    display_name=$name,
+                    binding_source='Rule',
+                    is_locked=1,
+                    updated_at=$now
+                WHERE organization_id=$org AND is_active=1
+                  AND (kkt_serial=$serial OR register_number=$rnm);
+                """;
+            binding.Parameters.AddWithValue("$loc", point.Id.ToString());
+            binding.Parameters.AddWithValue("$serial", GarantSredneuralskRegisterSerial);
+            binding.Parameters.AddWithValue("$rnm", GarantSredneuralskRnm);
+            binding.Parameters.AddWithValue("$name", GarantSredneuralskPointName);
+            binding.Parameters.AddWithValue("$now", now);
+            binding.Parameters.AddWithValue("$org", organization.Id.ToString());
+            var changed = binding.ExecuteNonQuery();
+
+            if (changed == 0)
+            {
+                using var insert = db.CreateCommand();
+                insert.Transaction = tx;
+                insert.CommandText = """
+                    INSERT INTO register_bindings(
+                        id,organization_id,location_id,fn,register_number,binding_source,is_locked,
+                        valid_from,valid_to,kkt_serial,display_name,created_at,updated_at,is_active)
+                    VALUES($id,$org,$loc,'',$rnm,'Rule',1,NULL,NULL,$serial,$name,$now,$now,1);
+                    """;
+                insert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+                insert.Parameters.AddWithValue("$org", organization.Id.ToString());
+                insert.Parameters.AddWithValue("$loc", point.Id.ToString());
+                insert.Parameters.AddWithValue("$rnm", GarantSredneuralskRnm);
+                insert.Parameters.AddWithValue("$serial", GarantSredneuralskRegisterSerial);
+                insert.Parameters.AddWithValue("$name", GarantSredneuralskPointName);
+                insert.Parameters.AddWithValue("$now", now);
+                insert.ExecuteNonQuery();
+            }
+        }
+
+        foreach (var tid in new[] { GarantSredneuralskPosTid, GarantSredneuralskQrTid })
+        {
+            using var terminal = db.CreateCommand();
+            terminal.Transaction = tx;
+            terminal.CommandText = """
+                INSERT INTO terminal_bindings(
+                    id,organization_id,location_id,provider,tid,mid,payment_method,
+                    binding_source,is_locked,valid_from,valid_to)
+                VALUES($id,$org,$loc,'Sber',$tid,'',$method,'Rule',1,NULL,NULL)
+                ON CONFLICT(organization_id,provider,tid) DO UPDATE SET
+                    location_id=excluded.location_id,
+                    payment_method=excluded.payment_method,
+                    binding_source='Rule',
+                    is_locked=1;
+                """;
+            terminal.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+            terminal.Parameters.AddWithValue("$org", organization.Id.ToString());
+            terminal.Parameters.AddWithValue("$loc", point.Id.ToString());
+            terminal.Parameters.AddWithValue("$tid", tid);
+            terminal.Parameters.AddWithValue("$method", tid == GarantSredneuralskQrTid ? "QR" : "POS");
+            terminal.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = """
+                INSERT INTO audit_log(occurred_at,action,details)
+                SELECT $now,'business_rule.garant_sredneuralsk',$details
+                WHERE NOT EXISTS(
+                    SELECT 1 FROM audit_log
+                    WHERE action='business_rule.garant_sredneuralsk' AND details=$details
+                );
+                """;
+            audit.Parameters.AddWithValue("$now", now);
+            audit.Parameters.AddWithValue("$details",
+                $"point={point.Id}; KKT={GarantSredneuralskRegisterSerial}; RNM={GarantSredneuralskRnm}; TID={GarantSredneuralskPosTid},{GarantSredneuralskQrTid}");
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
     }
 
     private static int TryKnownRegisterLocation(
