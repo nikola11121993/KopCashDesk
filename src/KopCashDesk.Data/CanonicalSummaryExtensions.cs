@@ -14,6 +14,7 @@ public static class CanonicalSummaryExtensions
         Guid? locationId = null)
     {
         database.EnsureManualTerminalPostings();
+        database.RebuildCrossSourceShiftMatches();
 
         DateOnly? fromDate = year is null ? null : new DateOnly(year.Value, month ?? 1, 1);
         DateOnly? toDate = fromDate is null
