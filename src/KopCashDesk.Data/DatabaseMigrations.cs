@@ -4,7 +4,7 @@ namespace KopCashDesk.Data;
 
 internal static class DatabaseMigrations
 {
-    public const long CurrentVersion = 6;
+    public const long CurrentVersion = 7;
 
     public static void Apply(Database database)
     {
@@ -33,6 +33,8 @@ internal static class DatabaseMigrations
             MigrateToV5(db);
         if (version < 6)
             MigrateToV6(db);
+        if (version < 7)
+            MigrateToV7(db);
 
         EnsureRevisionInfrastructure(db);
 
@@ -278,6 +280,53 @@ internal static class DatabaseMigrations
         {
             audit.Transaction = tx;
             audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','5 -> 6: organization/date summary indexes')";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void MigrateToV7(SqliteConnection db)
+    {
+        using var tx = db.BeginTransaction();
+
+        // Read-only performance upgrade. No business logic, UI or stored values change.
+        // Partial covering indexes keep daily/monthly summaries and per-KKT views off full table scans.
+        Execute(db, tx, """
+            CREATE INDEX IF NOT EXISTS ix_operations_bank_period_cover
+                ON operations(organization_id, location_id, occurred_at, payment, amount_kopecks)
+                WHERE source_kind='Bank' AND location_id IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS ix_operations_fiscal_period_cover
+                ON operations(organization_id, location_id, occurred_at, payment, amount_kopecks)
+                WHERE source_kind='Fiscal' AND location_id IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS ix_operations_taxcom_register_period
+                ON operations(organization_id, location_id, kkt_serial, registration_number, occurred_at, payment, amount_kopecks)
+                WHERE source='Taxcom.FiscalDocuments' AND source_kind='Fiscal';
+
+            CREATE INDEX IF NOT EXISTS ix_operations_source_document
+                ON operations(document_id, source, organization_id, location_id);
+
+            CREATE INDEX IF NOT EXISTS ix_register_bindings_active_identity
+                ON register_bindings(organization_id, is_active, kkt_serial, register_number, location_id);
+
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_period_cover
+                ON shift_closures(organization_id, location_id, closed_at, source, total_kopecks, cash_kopecks, electronic_kopecks);
+            """);
+
+        using (var version = db.CreateCommand())
+        {
+            version.Transaction = tx;
+            version.CommandText = "UPDATE schema_version SET version=7";
+            version.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','6 -> 7: read-performance covering indexes; no UI or accounting logic changes')";
             audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
             audit.ExecuteNonQuery();
         }
