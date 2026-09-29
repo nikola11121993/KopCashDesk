@@ -72,7 +72,7 @@ public partial class MainWindow : Window
         };
     }
 
-    private static TextBlock Text(string value, int size = 14, bool bold = false) => new()
+    private static TextBlock Text(string value, int size = 12, bool bold = false) => new()
     {
         Text = value,
         FontSize = size,
@@ -100,7 +100,7 @@ public partial class MainWindow : Window
         PageTitle.Text = "Рабочий стол";
         PageSubtitle.Text = "Обзор состояния системы";
         return Stack(
-            Text("КОП Кассы", 23, true),
+            Text("КОП Кассы", 21, true),
             Text($"Организаций: {_organizations.Count}    •    Торговых точек: {_locations.Count}    •    Операций: {_db.CountOperations()}"),
             Action("Импортировать архивы Сбер...", SberImport_Click),
             Action("Добавить организацию", (_, _) => EditOrganization(null)),
@@ -111,7 +111,7 @@ public partial class MainWindow : Window
     {
         PageTitle.Text = title;
         PageSubtitle.Text = "Данные отсутствуют";
-        return Stack(Text("Пока нет данных", 22, true), Text(message));
+        return Stack(Text("Пока нет данных", 18, true), Text(message));
     }
 
     private UIElement RenderOrganizations()
@@ -283,10 +283,10 @@ public partial class MainWindow : Window
         PageTitle.Text = "Настройки";
         PageSubtitle.Text = "Параметры приложения";
         return Stack(
-            Text("Хранение данных", 20, true),
+            Text("Хранение данных", 18, true),
             Text(_db.Path),
             Action("Создать резервную копию...", Backup_Click),
-            Text("Интеграции", 20, true),
+            Text("Интеграции", 18, true),
             Action("Открыть настройки интеграций", (_, _) => Navigate("integrations")),
             Action("Импорт архивов Сбер...", SberImport_Click));
     }
@@ -309,11 +309,11 @@ public partial class MainWindow : Window
         return new ScrollViewer
         {
             Content = Stack(
-                Text("Архивы Сбер", 20, true),
+                Text("Архивы Сбер", 18, true),
                 Text("Откройте «Сбер — импорт архивов», перетащите ZIP/XLSX отчёты и нажмите «Импортировать». Организация определяется по ИНН, варианты POS/СБП/QR одной точки объединяются, терминалы привязываются автоматически, дубли операций пропускаются."),
-                Text("Контекстные меню", 20, true),
+                Text("Контекстные меню", 18, true),
                 Text("Щёлкните правой кнопкой мыши по строке. Двойной щелчок открывает редактирование там, где оно доступно. В окне импорта Delete или контекстное меню убирают выбранный файл из списка."),
-                Text("Такском", 20, true),
+                Text("Такском", 18, true),
                 Text("Логин и пароль сохраняются через отдельное окно настроек. Для реального API-подключения потребуется Integrator-ID.")),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto
         };
