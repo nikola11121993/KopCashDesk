@@ -20,7 +20,9 @@ internal static class DatabaseMigrations
         if (version > CurrentVersion)
             throw new InvalidOperationException("Версия базы данных новее этой программы. Обновите программу.");
 
-        if (version < CurrentVersion)
+        // v7 only adds indexes; avoid copying a large database just to build read-only indexes.
+        // Older migrations can change stored structure/data and still receive a safety backup.
+        if (version < CurrentVersion && version < 6)
             database.BackupBeforeMigration(version);
 
         if (version < 2)
