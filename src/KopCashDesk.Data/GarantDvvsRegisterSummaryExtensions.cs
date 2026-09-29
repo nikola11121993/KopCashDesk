@@ -107,11 +107,14 @@ public static class GarantDvvsRegisterSummaryExtensions
 
     public static bool IsGarantDvvs(this Database database, Guid? organizationId, Guid? locationId)
     {
-        if (organizationId is null || locationId is null) return false;
-        var organization = database.Organizations().FirstOrDefault(x => x.Id == organizationId);
-        if (organization is null || DigitsOnly(organization.TaxId) != KnownBusinessRules.GarantTaxId) return false;
-        var location = database.Locations().FirstOrDefault(x => x.Id == locationId && x.OrganizationId == organizationId);
-        return location is not null && IsDvvs(location);
+        if (locationId is null) return false;
+        var location = database.Locations().FirstOrDefault(x => x.Id == locationId);
+        if (location is null) return false;
+        if (organizationId is Guid selectedOrganization && location.OrganizationId != selectedOrganization) return false;
+        var organization = database.Organizations().FirstOrDefault(x => x.Id == location.OrganizationId);
+        return organization is not null &&
+               DigitsOnly(organization.TaxId) == KnownBusinessRules.GarantTaxId &&
+               IsDvvs(location);
     }
 
     private static bool IsDvvs(KopCashDesk.Core.Location location) =>
