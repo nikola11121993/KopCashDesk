@@ -46,6 +46,7 @@ internal static class DatabaseMigrations
         // Data-only business rules are intentionally idempotent and remain outside the schema version.
         // This lets an already-v4 database receive corrected hard KKT bindings without rebuilding tables.
         KnownBusinessRules.ApplyPending(database);
+        RegisterBindingService.RepairDuplicatePhysicalRegisters(database);
 
         // Expensive consistency rebuilds run once when an existing database first reaches v6.
         // Importers perform the same maintenance after new files are added, so normal startup
