@@ -347,9 +347,11 @@ public partial class MainWindow
                 })
                 .OrderByDescending(x => x.Year).ThenByDescending(x => x.Month).ThenBy(x => x.Point).ToArray();
             monthlyGrid.ItemsSource = monthRows;
-            registerGrid.ItemsSource = _db.RegisterRevenueSummaries(SelectedOrganizationId, year, month, locationId);
 
             var isDvvs = _db.IsGarantDvvs(SelectedOrganizationId, locationId);
+            registerGrid.ItemsSource = isDvvs
+                ? _db.GarantDvvsRegisterRevenueSummaries(year, month, SelectedOrganizationId, locationId)
+                : _db.RegisterRevenueSummaries(SelectedOrganizationId, year, month, locationId);
             dvvsTab.Visibility = isDvvs ? Visibility.Visible : Visibility.Collapsed;
             if (isDvvs)
             {
@@ -367,10 +369,12 @@ public partial class MainWindow
                 var label = month is int selectedMonth
                     ? $"ИТОГО {culture.DateTimeFormat.GetMonthName(selectedMonth).ToUpper(culture)}"
                     : $"ИТОГО {year}";
+                var dvvsOrganizationId = dvvs.FirstOrDefault()?.OrganizationId
+                    ?? _locations.First(x => x.Id == locationId!.Value).OrganizationId;
                 dvvsRows.Add(new DvvsDailyRegisterRow(
                     null,
                     label,
-                    SelectedOrganizationId!.Value,
+                    dvvsOrganizationId,
                     locationId!.Value,
                     Money.Normalize(dvvs.Sum(x => x.Kassa1Electronic)),
                     Money.Normalize(dvvs.Sum(x => x.Kassa2Electronic)),
