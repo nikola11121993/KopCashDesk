@@ -13,6 +13,15 @@ public static class KnownBusinessRules
     public const string AtiMercuryRegisterSerial = "08050950";
     public const string AtiMercuryPointName = "Столовая АТИ";
 
+    public const string GarantTaxId = "6683011158";
+    public const string GarantDvvsPointName = "ДВВС";
+    public const string GarantDvvs1Serial = "00108722823598";
+    public const string GarantDvvs1Rnm = "0009046158049705";
+    public const string GarantDvvs2Serial = "00108720771767";
+    public const string GarantDvvs2Rnm = "0009168058061681";
+    public const string GarantDvvsSpareSerial = "00308302622940";
+    public const string GarantDvvsSpareRnm = "0009075914046300";
+
     public static string? PointNameForRegisterSerial(string serial)
     {
         var digits = DigitsOnly(serial);
@@ -21,6 +30,9 @@ public static class KnownBusinessRules
             ReftinskayaRegisterSerial => ReftinskayaPointName,
             AtiAppetitRegisterSerial => AtiAppetitPointName,
             AtiMercuryRegisterSerial => AtiMercuryPointName,
+            GarantDvvs1Serial => GarantDvvsPointName,
+            GarantDvvs2Serial => GarantDvvsPointName,
+            GarantDvvsSpareSerial => GarantDvvsPointName,
             _ => null
         };
     }
@@ -50,6 +62,7 @@ public static class KnownBusinessRules
     public static int ApplyPending(Database database)
     {
         EnsureRegisterLocationRules(database);
+        EnsureGarantDvvsRegisters(database);
 
         var applied = 0;
         var backupTaken = false;
@@ -79,7 +92,10 @@ public static class KnownBusinessRules
             INSERT INTO register_location_rules(rule_key,identity_kind,identity_value,target_name,target_address)
             VALUES
                 ('ati-mercury','serial',$mercury,$mercuryPoint,''),
-                ('ati-appetit','serial',$appetit,$appetitPoint,'')
+                ('ati-appetit','serial',$appetit,$appetitPoint,''),
+                ('garant-dvvs-1','serial',$dvvs1,$dvvsPoint,''),
+                ('garant-dvvs-2','serial',$dvvs2,$dvvsPoint,''),
+                ('garant-dvvs-spare','serial',$dvvsSpare,$dvvsPoint,'')
             ON CONFLICT(rule_key) DO UPDATE SET
                 identity_kind=excluded.identity_kind,
                 identity_value=excluded.identity_value,
@@ -90,8 +106,78 @@ public static class KnownBusinessRules
         command.Parameters.AddWithValue("$mercuryPoint", AtiMercuryPointName);
         command.Parameters.AddWithValue("$appetit", AtiAppetitRegisterSerial);
         command.Parameters.AddWithValue("$appetitPoint", AtiAppetitPointName);
+        command.Parameters.AddWithValue("$dvvs1", GarantDvvs1Serial);
+        command.Parameters.AddWithValue("$dvvs2", GarantDvvs2Serial);
+        command.Parameters.AddWithValue("$dvvsSpare", GarantDvvsSpareSerial);
+        command.Parameters.AddWithValue("$dvvsPoint", GarantDvvsPointName);
         command.ExecuteNonQuery();
         tx.Commit();
+    }
+
+    private static void EnsureGarantDvvsRegisters(Database database)
+    {
+        var organization = database.Organizations()
+            .FirstOrDefault(x => DigitsOnly(x.TaxId) == GarantTaxId);
+        if (organization is null) return;
+
+        var locations = database.Locations()
+            .Where(x => x.OrganizationId == organization.Id && x.IsActive)
+            .ToArray();
+        var dvvs = locations.FirstOrDefault(x => Normalize(x.Name) == Normalize(GarantDvvsPointName))
+            ?? locations.FirstOrDefault(x =>
+                Normalize(x.Address).Contains("универсиады", StringComparison.Ordinal) &&
+                Normalize(x.Address).Contains("11", StringComparison.Ordinal));
+        if (dvvs is null) return;
+
+        var known = new[]
+        {
+            (Name: "ДВВС Касса 1", Serial: GarantDvvs1Serial, Rnm: GarantDvvs1Rnm),
+            (Name: "ДВВС Касса 2", Serial: GarantDvvs2Serial, Rnm: GarantDvvs2Rnm),
+            (Name: "Запасная ДВВС", Serial: GarantDvvsSpareSerial, Rnm: GarantDvvsSpareRnm)
+        };
+
+        var bindings = RegisterBindingService.Read(database, true);
+        foreach (var item in known)
+        {
+            var current = bindings.FirstOrDefault(x =>
+                x.OrganizationId == organization.Id &&
+                x.IsActive &&
+                (DigitsOnly(x.KktSerial) == item.Serial || DigitsOnly(x.RegisterNumber) == item.Rnm));
+
+            if (current is null)
+            {
+                RegisterBindingService.Save(database, new RegisterBinding(
+                    Guid.NewGuid(),
+                    organization.Id,
+                    dvvs.Id,
+                    "",
+                    item.Rnm,
+                    BindingSource.Rule,
+                    true,
+                    null,
+                    null,
+                    item.Serial,
+                    item.Name));
+                continue;
+            }
+
+            if (current.LocationId == dvvs.Id &&
+                current.DisplayName == item.Name &&
+                DigitsOnly(current.KktSerial) == item.Serial &&
+                DigitsOnly(current.RegisterNumber) == item.Rnm &&
+                current.IsLocked)
+                continue;
+
+            RegisterBindingService.Save(database, current with
+            {
+                LocationId = dvvs.Id,
+                KktSerial = item.Serial,
+                RegisterNumber = item.Rnm,
+                DisplayName = item.Name,
+                BindingSource = current.BindingSource == BindingSource.Manual ? BindingSource.Manual : BindingSource.Rule,
+                IsLocked = true
+            });
+        }
     }
 
     private static int TryKnownRegisterLocation(
