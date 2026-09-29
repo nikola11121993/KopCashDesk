@@ -3,6 +3,7 @@ using KopCashDesk.Data;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 
 namespace KopCashDesk.Desktop;
 
@@ -64,12 +65,29 @@ public partial class MainWindow
         filters.Children.Add(addDayButton);
         root.Children.Add(filters);
 
-        var totals = new TextBlock { FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 14), TextWrapping = TextWrapping.Wrap };
+        var totals = new TextBlock { FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 14), TextWrapping = TextWrapping.Wrap };
         Grid.SetRow(totals, 1);
         root.Children.Add(totals);
 
         DataGrid dailyGrid = null!;
         DataGrid monthlyGrid = null!;
+        DataGrid registerGrid = null!;
+        var fullYearCache = new Dictionary<string, DaySummaryRow[]>(StringComparer.Ordinal);
+
+        DaySummaryRow[] FullYearRows(Guid? selectedLocationId)
+        {
+            var cacheKey = selectedLocationId?.ToString("N") ?? "*";
+            if (fullYearCache.TryGetValue(cacheKey, out var cached)) return cached;
+
+            var source = _db.CanonicalPointDaySummaries(SelectedOrganizationId, 2026, null, selectedLocationId);
+            var manualCash = _db.ManualCashPostings(SelectedOrganizationId, 2026, null, selectedLocationId)
+                .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
+            var manualTerminal = _db.ManualTerminalPostings(SelectedOrganizationId, 2026, null, selectedLocationId)
+                .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
+            cached = source.Select(x => ToDayRowV051(x, manualCash, manualTerminal)).ToArray();
+            fullYearCache[cacheKey] = cached;
+            return cached;
+        }
 
         bool HasManualCash(DaySummaryRow row) => _db.ManualCashPostings(row.OrganizationId, row.DateValue.Year, row.DateValue.Month, row.LocationId)
             .Any(x => x.Date == row.DateValue);
@@ -109,11 +127,13 @@ public partial class MainWindow
             if (isChecked)
             {
                 _db.SetManualCash(row.OrganizationId, row.LocationId, row.DateValue, row.Sber.Value);
+                fullYearCache.Clear();
                 StatusText.Text = $"{row.Point}: касса за {row.Date} = {row.Sber.Value:N2} ₽";
             }
             else
             {
                 _db.ClearManualCash(row.OrganizationId, row.LocationId, row.DateValue);
+                fullYearCache.Clear();
                 StatusText.Text = $"{row.Point}: ручная корректировка кассы за {row.Date} снята";
             }
             RefreshData();
@@ -127,11 +147,13 @@ public partial class MainWindow
             if (dialog.ClearRequested)
             {
                 _db.ClearManualCash(row.OrganizationId, row.LocationId, row.DateValue);
+                fullYearCache.Clear();
                 StatusText.Text = $"{row.Point}: ручная корректировка кассы за {row.Date} очищена";
             }
             else if (dialog.Value is decimal value)
             {
                 _db.SetManualCash(row.OrganizationId, row.LocationId, row.DateValue, value);
+                fullYearCache.Clear();
                 StatusText.Text = $"{row.Point}: касса за {row.Date} вручную = {value:N2} ₽";
             }
             RefreshData();
@@ -151,11 +173,13 @@ public partial class MainWindow
             if (dialog.ClearRequested)
             {
                 _db.ClearManualTerminal(row.OrganizationId, row.LocationId, row.DateValue);
+                fullYearCache.Clear();
                 StatusText.Text = $"{row.Point}: ручная сумма терминала за {row.Date} очищена";
             }
             else if (dialog.Value is decimal value)
             {
                 _db.SetManualTerminal(row.OrganizationId, row.LocationId, row.DateValue, value);
+                fullYearCache.Clear();
                 StatusText.Text = $"{row.Point}: терминал за {row.Date} вручную = {value:N2} ₽";
             }
             RefreshData();
@@ -181,6 +205,7 @@ public partial class MainWindow
 
             if (hasTerminal) _db.ClearManualTerminal(row.OrganizationId, row.LocationId, row.DateValue);
             if (hasCash) _db.ClearManualCash(row.OrganizationId, row.LocationId, row.DateValue);
+            fullYearCache.Clear();
             StatusText.Text = $"{row.Point}: ручные данные за {row.Date} удалены";
             RefreshData();
         }
@@ -241,6 +266,7 @@ public partial class MainWindow
 
             _db.SetManualTerminal(dialog.OrganizationId, dialog.LocationId, dialog.Date, dialog.TerminalAmount);
             _db.SetManualCash(dialog.OrganizationId, dialog.LocationId, dialog.Date, dialog.CashAmount);
+            fullYearCache.Clear();
             var point = _locations.FirstOrDefault(x => x.Id == dialog.LocationId)?.Name ?? "Точка";
             StatusText.Text = $"{point}: {dialog.Date:dd.MM.yyyy} добавлен вручную. Терминал {dialog.TerminalAmount:N2} ₽, касса {dialog.CashAmount:N2} ₽.";
 
@@ -259,10 +285,12 @@ public partial class MainWindow
 
         dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash, EditManualTerminal, DeleteManualDay);
         monthlyGrid = BuildMonthlySummaryGrid();
+        registerGrid = BuildRegisterRevenueGrid();
         addDayButton.Click += (_, _) => AddManualDay();
         var tabs = new TabControl();
         tabs.Items.Add(new TabItem { Header = "По дням", Content = dailyGrid });
         tabs.Items.Add(new TabItem { Header = "По месяцам", Content = monthlyGrid });
+        tabs.Items.Add(new TabItem { Header = "По кассам", Content = registerGrid });
         Grid.SetRow(tabs, 2);
         root.Children.Add(tabs);
 
@@ -303,6 +331,7 @@ public partial class MainWindow
                 })
                 .OrderByDescending(x => x.Year).ThenByDescending(x => x.Month).ThenBy(x => x.Point).ToArray();
             monthlyGrid.ItemsSource = monthRows;
+            registerGrid.ItemsSource = _db.RegisterRevenueSummaries(SelectedOrganizationId, year, month, locationId);
 
             // Верхняя строка не зависит от выбранного месяца: это рабочий накопительный итог за 2026 год.
             // Для ГРЭС-6 действует подтверждённая пользователем контрольная точка:
@@ -314,26 +343,9 @@ public partial class MainWindow
 
             if (selectedLocation is not null && IsGres6CorrectionPoint(selectedLocation.Name))
             {
-                var trackerRowsSource = _db.CanonicalPointDaySummaries(
-                    SelectedOrganizationId,
-                    2026,
-                    null,
-                    selectedLocation.Id);
-                var trackerManualCash = _db.ManualCashPostings(
-                        SelectedOrganizationId,
-                        2026,
-                        null,
-                        selectedLocation.Id)
-                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
-                var trackerManualTerminal = _db.ManualTerminalPostings(
-                        SelectedOrganizationId,
-                        2026,
-                        null,
-                        selectedLocation.Id)
-                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
-
-                var trackerRows = trackerRowsSource
-                    .Select(x => ToDayRowV051(x, trackerManualCash, trackerManualTerminal))
+                var trackerRows = (year == 2026 && month is null
+                        ? dayRows
+                        : FullYearRows(selectedLocation.Id))
                     .Where(x => x.DateValue >= Gres6OverageStartDate)
                     .ToArray();
 
@@ -354,27 +366,9 @@ public partial class MainWindow
             }
             else
             {
-                var totalRowsSource = _db.CanonicalPointDaySummaries(
-                    SelectedOrganizationId,
-                    2026,
-                    null,
-                    locationId);
-                var totalManualCash = _db.ManualCashPostings(
-                        SelectedOrganizationId,
-                        2026,
-                        null,
-                        locationId)
-                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
-                var totalManualTerminal = _db.ManualTerminalPostings(
-                        SelectedOrganizationId,
-                        2026,
-                        null,
-                        locationId)
-                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
-
-                var totalRows = totalRowsSource
-                    .Select(x => ToDayRowV051(x, totalManualCash, totalManualTerminal))
-                    .ToArray();
+                var totalRows = year == 2026 && month is null
+                    ? dayRows
+                    : FullYearRows(locationId);
 
                 var terminalTotal = Money.Normalize(totalRows.Sum(x => x.Sber ?? 0m));
                 var cashTotal = Money.Normalize(totalRows.Sum(x => x.CashElectronic ?? 0m));
@@ -397,6 +391,43 @@ public partial class MainWindow
         locationBox.SelectionChanged += (_, _) => RefreshData();
         RefreshData();
         return root;
+    }
+
+    private static DataGrid BuildRegisterRevenueGrid()
+    {
+        var grid = new DataGrid
+        {
+            IsReadOnly = true,
+            AutoGenerateColumns = false,
+            SelectionMode = DataGridSelectionMode.Single,
+            CanUserAddRows = false
+        };
+
+        foreach (var column in new[]
+        {
+            ("Точка", "Point", 150),
+            ("ККТ / касса", "Register", 180),
+            ("РНМ", "Rnm", 145),
+            ("ФН", "Fn", 145),
+            ("Зав. №", "KktSerial", 135),
+            ("Смен", "ShiftCount", 60),
+            ("Наличные", "Cash", 105),
+            ("Безналичные", "Electronic", 115),
+            ("Выручка", "Total", 110),
+            ("Последнее закрытие", "LastClosed", 145)
+        })
+        {
+            var binding = new Binding(column.Item2);
+            if (column.Item2 is "Cash" or "Electronic" or "Total") binding.StringFormat = "N2";
+            grid.Columns.Add(new DataGridTextColumn
+            {
+                Header = column.Item1,
+                Binding = binding,
+                Width = column.Item3
+            });
+        }
+
+        return grid;
     }
 
     private static DaySummaryRow ToDayRowV051(
