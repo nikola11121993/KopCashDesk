@@ -9,6 +9,17 @@ namespace KopCashDesk.Desktop;
 
 public partial class MainWindow
 {
+    private sealed record DvvsDailyRegisterRow(
+        DateOnly? DateValue,
+        string Date,
+        Guid OrganizationId,
+        Guid LocationId,
+        decimal Kassa1,
+        decimal Kassa2,
+        decimal Spare,
+        decimal Total,
+        bool IsTotal = false);
+
     private static readonly DateOnly Gres6OverageStartDate = new(2026, 9, 9);
     private const decimal Gres6InitialOverage = 634022m;
 
@@ -72,6 +83,8 @@ public partial class MainWindow
         DataGrid dailyGrid = null!;
         DataGrid monthlyGrid = null!;
         DataGrid registerGrid = null!;
+        DataGrid dvvsGrid = null!;
+        TabItem dvvsTab = null!;
         var fullYearCache = new Dictionary<string, DaySummaryRow[]>(StringComparer.Ordinal);
 
         DaySummaryRow[] FullYearRows(Guid? selectedLocationId)
@@ -286,11 +299,14 @@ public partial class MainWindow
         dailyGrid = BuildDailySummaryGrid(ToggleSberCopy, EditManualCash, EditManualTerminal, DeleteManualDay);
         monthlyGrid = BuildMonthlySummaryGrid();
         registerGrid = BuildRegisterRevenueGrid();
+        dvvsGrid = BuildDvvsRegisterDailyGrid();
         addDayButton.Click += (_, _) => AddManualDay();
         var tabs = new TabControl();
         tabs.Items.Add(new TabItem { Header = "По дням", Content = dailyGrid });
         tabs.Items.Add(new TabItem { Header = "По месяцам", Content = monthlyGrid });
         tabs.Items.Add(new TabItem { Header = "По кассам", Content = registerGrid });
+        dvvsTab = new TabItem { Header = "ДВВС — 3 кассы", Content = dvvsGrid, Visibility = Visibility.Collapsed };
+        tabs.Items.Add(dvvsTab);
         Grid.SetRow(tabs, 2);
         root.Children.Add(tabs);
 
@@ -333,6 +349,41 @@ public partial class MainWindow
             monthlyGrid.ItemsSource = monthRows;
             registerGrid.ItemsSource = _db.RegisterRevenueSummaries(SelectedOrganizationId, year, month, locationId);
 
+            var isDvvs = _db.IsGarantDvvs(SelectedOrganizationId, locationId);
+            dvvsTab.Visibility = isDvvs ? Visibility.Visible : Visibility.Collapsed;
+            if (isDvvs)
+            {
+                var dvvs = _db.GarantDvvsRegisterDaySummaries(year, month, SelectedOrganizationId, locationId);
+                var dvvsRows = dvvs.Select(x => new DvvsDailyRegisterRow(
+                    x.Date,
+                    x.Date.ToString("dd.MM.yyyy"),
+                    x.OrganizationId,
+                    x.LocationId,
+                    x.Kassa1Electronic,
+                    x.Kassa2Electronic,
+                    x.SpareElectronic,
+                    x.TotalElectronic)).ToList();
+
+                var label = month is int selectedMonth
+                    ? $"ИТОГО {culture.DateTimeFormat.GetMonthName(selectedMonth).ToUpper(culture)}"
+                    : $"ИТОГО {year}";
+                dvvsRows.Add(new DvvsDailyRegisterRow(
+                    null,
+                    label,
+                    SelectedOrganizationId!.Value,
+                    locationId!.Value,
+                    Money.Normalize(dvvs.Sum(x => x.Kassa1Electronic)),
+                    Money.Normalize(dvvs.Sum(x => x.Kassa2Electronic)),
+                    Money.Normalize(dvvs.Sum(x => x.SpareElectronic)),
+                    Money.Normalize(dvvs.Sum(x => x.TotalElectronic)),
+                    true));
+                dvvsGrid.ItemsSource = dvvsRows;
+            }
+            else
+            {
+                dvvsGrid.ItemsSource = Array.Empty<DvvsDailyRegisterRow>();
+            }
+
             // Верхняя строка не зависит от выбранного месяца: это рабочий накопительный итог за 2026 год.
             // Для ГРЭС-6 действует подтверждённая пользователем контрольная точка:
             // с 09.09.2026 кассу не пробивают, стартовое перепробитие = 634 022 ₽,
@@ -341,7 +392,21 @@ public partial class MainWindow
                 ? _locations.FirstOrDefault(x => x.Id == selectedLocationId)
                 : null;
 
-            if (selectedLocation is not null && IsGres6CorrectionPoint(selectedLocation.Name))
+            if (isDvvs)
+            {
+                var dvvsYear = _db.GarantDvvsRegisterDaySummaries(year, null, SelectedOrganizationId, locationId);
+                var kassa1 = Money.Normalize(dvvsYear.Sum(x => x.Kassa1Electronic));
+                var kassa2 = Money.Normalize(dvvsYear.Sum(x => x.Kassa2Electronic));
+                var spare = Money.Normalize(dvvsYear.Sum(x => x.SpareElectronic));
+                var all = Money.Normalize(kassa1 + kassa2 + spare);
+                totals.Text =
+                    $"ДВВС — безнал по фискальным документам:     " +
+                    $"Касса 1 (iiko): {kassa1:N2} ₽     •     " +
+                    $"Касса 2 (iiko): {kassa2:N2} ₽     •     " +
+                    $"Запасная: {spare:N2} ₽     •     " +
+                    $"ИТОГО: {all:N2} ₽";
+            }
+            else if (selectedLocation is not null && IsGres6CorrectionPoint(selectedLocation.Name))
             {
                 var trackerRows = (year == 2026 && month is null
                         ? dayRows
@@ -391,6 +456,45 @@ public partial class MainWindow
         locationBox.SelectionChanged += (_, _) => RefreshData();
         RefreshData();
         return root;
+    }
+
+    private static DataGrid BuildDvvsRegisterDailyGrid()
+    {
+        var grid = new DataGrid
+        {
+            IsReadOnly = true,
+            AutoGenerateColumns = false,
+            SelectionMode = DataGridSelectionMode.Single,
+            CanUserAddRows = false,
+            CanUserSortColumns = false,
+            ToolTip = "ДВВС: суммы из отчётов Такском по фискальным документам. Физическая ККТ определяется по заводскому номеру; замена ФН не создаёт новую кассу."
+        };
+
+        foreach (var column in new[]
+        {
+            ("Дата", "Date", 125),
+            ("Касса 1 (iiko), безнал", "Kassa1", 165),
+            ("Касса 2 (iiko), безнал", "Kassa2", 165),
+            ("Запасная ДВВС, безнал", "Spare", 180),
+            ("ИТОГО ДВВС", "Total", 140)
+        })
+        {
+            var binding = new Binding(column.Item2);
+            if (column.Item2 is "Kassa1" or "Kassa2" or "Spare" or "Total") binding.StringFormat = "N2";
+            grid.Columns.Add(new DataGridTextColumn
+            {
+                Header = column.Item1,
+                Binding = binding,
+                Width = column.Item3
+            });
+        }
+
+        grid.LoadingRow += (_, e) =>
+        {
+            if (e.Row.Item is DvvsDailyRegisterRow row && row.IsTotal)
+                e.Row.FontWeight = FontWeights.Bold;
+        };
+        return grid;
     }
 
     private static DataGrid BuildRegisterRevenueGrid()
