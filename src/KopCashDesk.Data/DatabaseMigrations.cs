@@ -34,6 +34,8 @@ internal static class DatabaseMigrations
         if (version < 6)
             MigrateToV6(db);
 
+        EnsureRevisionInfrastructure(db);
+
         // Refresh SQLite planner statistics after schema/index changes.
         using (var optimize = db.CreateCommand())
         {
@@ -280,6 +282,35 @@ internal static class DatabaseMigrations
         }
 
         tx.Commit();
+    }
+
+    private static void EnsureRevisionInfrastructure(SqliteConnection db)
+    {
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS data_revisions(
+                name TEXT PRIMARY KEY,
+                revision INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO data_revisions(name,revision) VALUES('shift_closures',0);
+
+            CREATE TRIGGER IF NOT EXISTS trg_shift_revision_insert
+            AFTER INSERT ON shift_closures
+            BEGIN
+                UPDATE data_revisions SET revision=revision+1 WHERE name='shift_closures';
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_shift_revision_update
+            AFTER UPDATE ON shift_closures
+            BEGIN
+                UPDATE data_revisions SET revision=revision+1 WHERE name='shift_closures';
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_shift_revision_delete
+            AFTER DELETE ON shift_closures
+            BEGIN
+                UPDATE data_revisions SET revision=revision+1 WHERE name='shift_closures';
+            END;
+            """;
+        command.ExecuteNonQuery();
     }
 
     private static void NormalizeTaxIds(SqliteConnection db, SqliteTransaction tx)
