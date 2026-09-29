@@ -6,6 +6,7 @@ using KopCashDesk.Data;
 using KopCashDesk.Desktop;
 using Microsoft.Data.Sqlite;
 using Xunit;
+using CoreLocation = KopCashDesk.Core.Location;
 
 namespace KopCashDesk.Tests;
 
@@ -38,7 +39,7 @@ public sealed class TaxcomDvvsFiscalImportTests
             var database = new Database(databasePath);
             database.Initialize();
             var organization = new Organization(Guid.NewGuid(), "ООО ГАРАНТ", KnownBusinessRules.GarantTaxId);
-            var location = new Location(Guid.NewGuid(), organization.Id, KnownBusinessRules.GarantDvvsPointName, "Екатеринбург, ул. Универсиады, 11");
+            var location = new CoreLocation(Guid.NewGuid(), organization.Id, KnownBusinessRules.GarantDvvsPointName, "Екатеринбург, ул. Универсиады, 11");
             database.Save(organization);
             database.Save(location);
             KnownBusinessRules.ApplyPending(database);
