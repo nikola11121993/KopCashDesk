@@ -28,13 +28,33 @@ public partial class MainWindow
             DockPanel.SetDock(notice, Dock.Top); root.Children.Add(notice);
         }
         var grid = new DataGrid { AutoGenerateColumns = false, IsReadOnly = true, CanUserAddRows = false };
-        foreach (var column in new[] { ("Название ККТ", "Name", 170), ("Зав. № ККТ", "Serial", 145), ("ФН", "Fn", 145), ("РНМ", "Rnm", 145), ("Организация", "Organization", 120), ("Торговая точка", "Point", 190), ("Источник привязки", "Source", 100), ("Статус", "Status", 160), ("Период", "Period", 180) })
+        foreach (var column in new[] { ("Название ККТ", "Name", 170), ("Зав. № ККТ", "Serial", 145), ("ФН (история)", "Fn", 240), ("РНМ", "Rnm", 145), ("Организация", "Organization", 120), ("Торговая точка", "Point", 190), ("Источник привязки", "Source", 100), ("Статус", "Status", 160), ("Период", "Period", 180) })
             grid.Columns.Add(new DataGridTextColumn { Header = column.Item1, Binding = new Binding(column.Item2), Width = column.Item3 });
         void Load()
         {
             var locations = _db.Locations(true); var orgs = _db.Organizations();
+            var fiscalDriveHistory = _db.RegisterFiscalDriveHistory(SelectedOrganizationId);
+
+            string FiscalDrives(RegisterBinding binding)
+            {
+                var rows = fiscalDriveHistory
+                    .Where(x => x.OrganizationId == binding.OrganizationId &&
+                        (binding.KktSerial.Length > 0
+                            ? x.KktSerial == binding.KktSerial
+                            : binding.RegisterNumber.Length > 0 && x.RegisterNumber == binding.RegisterNumber))
+                    .OrderBy(x => x.FirstSeen ?? DateTimeOffset.MinValue)
+                    .Select(x => x.FiscalDriveNumber)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+
+                if (!string.IsNullOrWhiteSpace(binding.FiscalDriveNumber))
+                    rows.Add(binding.FiscalDriveNumber);
+
+                return string.Join(" / ", rows.Distinct(StringComparer.Ordinal));
+            }
+
             grid.ItemsSource = RegisterBindingService.Read(_db, history.IsChecked == true).Where(x => SelectedOrganizationId is null || x.OrganizationId == SelectedOrganizationId)
-                .Select(b => new RegisterRow(b, b.DisplayName, b.KktSerial, b.FiscalDriveNumber, b.RegisterNumber,
+                .Select(b => new RegisterRow(b, b.DisplayName, b.KktSerial, FiscalDrives(b), b.RegisterNumber,
                     orgs.FirstOrDefault(x => x.Id == b.OrganizationId)?.Name ?? "",
                     locations.FirstOrDefault(x => x.Id == b.LocationId)?.Name ?? "ККТ не привязана",
                     b.BindingSource == BindingSource.Manual ? "Вручную" : b.BindingSource == BindingSource.Rule ? "Правило" : "Автоматически",
