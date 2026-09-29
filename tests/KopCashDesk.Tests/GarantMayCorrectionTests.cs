@@ -63,6 +63,36 @@ public sealed class GarantMayCorrectionTests
     }
 
     [Fact]
+    public void Sredneuralsk_VerifiedHistoryRestoresMayTerminalTotalWithoutRawReimport()
+    {
+        var folder = NewFolder();
+        try
+        {
+            var db = new Database(Path.Combine(folder, "cashdesk.db"));
+            db.Initialize();
+
+            var org = new Organization(Guid.NewGuid(), "ООО ГАРАНТ", KnownBusinessRules.GarantTaxId);
+            db.Save(org);
+
+            KnownBusinessRules.ApplyPending(db);
+
+            var point = Assert.Single(db.Locations(), x => x.Name == KnownBusinessRules.GarantSredneuralskPointName);
+            var may11 = Assert.Single(db.ManualTerminalPostings(org.Id, 2026, 5, point.Id));
+            Assert.Equal(new DateOnly(2026, 5, 11), may11.Date);
+            Assert.Equal(6830m, may11.Electronic);
+
+            var summary = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 5, point.Id));
+            Assert.Equal(6830m, summary.BankElectronic);
+            Assert.Null(summary.FiscalElectronic);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDelete(folder);
+        }
+    }
+
+    [Fact]
     public void Sredneuralsk_ReimportMovesPreviouslyMisboundSberOperationOutOfDvvs()
     {
         var folder = NewFolder();
