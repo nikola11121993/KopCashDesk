@@ -10,7 +10,6 @@ public static class ShiftDetailExtensions
 {
     public static IReadOnlyList<ShiftDetail> ShiftDetails(this Database database, Guid org, Guid? location, DateOnly? day = null)
     {
-        database.RebuildCrossSourceShiftMatches();
         using var db = RegisterBindingService.Open(database); using var c = db.CreateCommand();
         c.CommandText = """
             SELECT s.id,s.source,s.external_id,s.register_display_name,s.kkt_serial,s.fn,s.registration_number,
