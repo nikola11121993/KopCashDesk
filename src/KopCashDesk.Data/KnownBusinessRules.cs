@@ -81,6 +81,7 @@ public static class KnownBusinessRules
         EnsureRegisterLocationRules(database);
         EnsureGarantDvvsRegisters(database);
         EnsureGarantSredneuralsk(database);
+        EnsureGarantSredneuralskVerifiedTerminalHistory(database);
 
         var applied = 0;
         var backupTaken = false;
@@ -325,6 +326,75 @@ public static class KnownBusinessRules
             audit.Parameters.AddWithValue("$now", now);
             audit.Parameters.AddWithValue("$details",
                 $"point={point.Id}; KKT={GarantSredneuralskRegisterSerial}; RNM={GarantSredneuralskRnm}; TID={GarantSredneuralskPosTid},{GarantSredneuralskQrTid}");
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void EnsureGarantSredneuralskVerifiedTerminalHistory(Database database)
+    {
+        var organization = database.Organizations()
+            .FirstOrDefault(x => DigitsOnly(x.TaxId) == GarantTaxId);
+        if (organization is null) return;
+
+        var point = database.Locations()
+            .FirstOrDefault(x =>
+                x.OrganizationId == organization.Id &&
+                x.IsActive &&
+                (Normalize(x.Name) == Normalize(GarantSredneuralskPointName) ||
+                 (Normalize(x.Address).Contains("среднеуральск", StringComparison.Ordinal) &&
+                  Normalize(x.Address).Contains("набереж", StringComparison.Ordinal) &&
+                  Normalize(x.Address).Contains("8а", StringComparison.Ordinal))));
+        if (point is null) return;
+
+        database.EnsureManualTerminalPostings();
+
+        // Verified from the user's Sber distribution report:
+        // TID 34771891 + 34771897, Среднеуральск, Набережная 8а.
+        // Keep these as daily terminal facts so an already-imported legacy database
+        // is corrected even though historical bank operations did not store TID.
+        var verified = new[]
+        {
+            (Date: new DateOnly(2026, 3, 26), Amount: 9800m),
+            (Date: new DateOnly(2026, 3, 28), Amount: 37010m),
+            (Date: new DateOnly(2026, 3, 29), Amount: 10500m),
+            (Date: new DateOnly(2026, 5, 11), Amount: 6830m)
+        };
+
+        using var db = Open(database);
+        using var tx = db.BeginTransaction();
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        var inserted = 0;
+
+        foreach (var row in verified)
+        {
+            using var command = db.CreateCommand();
+            command.Transaction = tx;
+            command.CommandText = """
+                INSERT OR IGNORE INTO manual_terminal_postings(
+                    organization_id,location_id,business_date,electronic_kopecks,created_at,updated_at)
+                VALUES($org,$loc,$date,$amount,$now,$now);
+                """;
+            command.Parameters.AddWithValue("$org", organization.Id.ToString());
+            command.Parameters.AddWithValue("$loc", point.Id.ToString());
+            command.Parameters.AddWithValue("$date", row.Date.ToString("yyyy-MM-dd"));
+            command.Parameters.AddWithValue("$amount", Money.ToKopecks(row.Amount));
+            command.Parameters.AddWithValue("$now", now);
+            inserted += command.ExecuteNonQuery();
+        }
+
+        if (inserted > 0)
+        {
+            using var audit = db.CreateCommand();
+            audit.Transaction = tx;
+            audit.CommandText = """
+                INSERT INTO audit_log(occurred_at,action,details)
+                VALUES($now,'business_rule.garant_sredneuralsk_terminal_history',$details);
+                """;
+            audit.Parameters.AddWithValue("$now", now);
+            audit.Parameters.AddWithValue("$details",
+                $"point={point.Id}; inserted={inserted}; verified daily Sber totals: 2026-03-26=9800, 2026-03-28=37010, 2026-03-29=10500, 2026-05-11=6830");
             audit.ExecuteNonQuery();
         }
 
