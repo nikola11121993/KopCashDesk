@@ -4,7 +4,7 @@ namespace KopCashDesk.Data;
 
 internal static class DatabaseMigrations
 {
-    public const long CurrentVersion = 5;
+    public const long CurrentVersion = 6;
 
     public static void Apply(Database database)
     {
@@ -31,6 +31,8 @@ internal static class DatabaseMigrations
             RegisterSchemaMigration.Apply(db);
         if (version < 5)
             MigrateToV5(db);
+        if (version < 6)
+            MigrateToV6(db);
 
         // Refresh SQLite planner statistics after schema/index changes.
         using (var optimize = db.CreateCommand())
@@ -234,6 +236,37 @@ internal static class DatabaseMigrations
         {
             audit.Transaction = tx;
             audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','4 -> 5: large database indexes')";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void MigrateToV6(SqliteConnection db)
+    {
+        using var tx = db.BeginTransaction();
+
+        // Summary screens commonly filter by organization + date while showing all locations.
+        // These indexes keep those reads on a narrow time range instead of scanning a whole large database.
+        Execute(db, tx, """
+            CREATE INDEX IF NOT EXISTS ix_operations_org_time_summary
+                ON operations(organization_id, occurred_at, source_kind, payment, location_id, amount_kopecks);
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_org_time_summary
+                ON shift_closures(organization_id, closed_at, location_id, source, total_kopecks, cash_kopecks, electronic_kopecks);
+            """);
+
+        using (var version = db.CreateCommand())
+        {
+            version.Transaction = tx;
+            version.CommandText = "UPDATE schema_version SET version=6";
+            version.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','5 -> 6: organization/date summary indexes')";
             audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
             audit.ExecuteNonQuery();
         }
