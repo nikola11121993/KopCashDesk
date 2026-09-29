@@ -67,7 +67,12 @@ public static class RegisterRevenueSummaryExtensions
             bound AS (
                 SELECT
                     b.organization_id,b.location_id,b.organization,b.point,
-                    b.display_name,b.kkt_serial,b.fn,b.register_number,
+                    b.display_name,b.kkt_serial,
+                    CASE
+                        WHEN COUNT(NULLIF(s.fn,''))>0 THEN GROUP_CONCAT(DISTINCT NULLIF(s.fn,''))
+                        ELSE b.fn
+                    END AS fn,
+                    b.register_number,
                     COUNT(s.id) AS shift_count,
                     COALESCE(SUM(s.cash_kopecks),0) AS cash_sum,
                     COALESCE(SUM(s.electronic_kopecks),0) AS electronic_sum,
