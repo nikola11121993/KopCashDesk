@@ -16,6 +16,14 @@ public static class CanonicalSummaryExtensions
         database.EnsureManualTerminalPostings();
         database.RebuildCrossSourceShiftMatches();
 
+        var garant = database.Organizations().FirstOrDefault(x =>
+            new string((x.TaxId ?? string.Empty).Where(char.IsDigit).ToArray()) == KnownBusinessRules.GarantTaxId);
+        var garantDvvs = garant is null
+            ? null
+            : KnownBusinessRules.FindKnownPoint(
+                database.Locations().Where(x => x.OrganizationId == garant.Id),
+                KnownBusinessRules.GarantDvvsPointName);
+
         DateOnly? fromDate = year is null ? null : new DateOnly(year.Value, month ?? 1, 1);
         DateOnly? toDate = fromDate is null
             ? null
@@ -199,17 +207,35 @@ public static class CanonicalSummaryExtensions
         var result = new List<PointDaySummary>();
         while (reader.Read())
         {
+            var rowOrganizationId = Guid.Parse(reader.GetString(1));
+            var rowLocationId = Guid.Parse(reader.GetString(3));
+            var bankElectronic = ReadMoney(reader, 5);
+            var fiscalElectronic = ReadMoney(reader, 6);
+            var shiftElectronic = ReadMoney(reader, 9);
+
+            // ДВВС uses two iiko cash registers (plus the rarely used spare KKT).
+            // For the working reconciliation the terminal side is the fiscal cashless amount:
+            // if iiko recorded the payment, the integrated terminal recorded the same sale.
+            // Raw Sber streams remain in operations for audit but must not inflate the accountant view.
+            if (garant is not null &&
+                garantDvvs is not null &&
+                rowOrganizationId == garant.Id &&
+                rowLocationId == garantDvvs.Id)
+            {
+                bankElectronic = fiscalElectronic ?? shiftElectronic;
+            }
+
             result.Add(new(
                 DateOnly.ParseExact(reader.GetString(0), "yyyy-MM-dd", CultureInfo.InvariantCulture),
-                Guid.Parse(reader.GetString(1)),
+                rowOrganizationId,
                 reader.GetString(2),
-                Guid.Parse(reader.GetString(3)),
+                rowLocationId,
                 reader.GetString(4),
-                ReadMoney(reader, 5),
-                ReadMoney(reader, 6),
+                bankElectronic,
+                fiscalElectronic,
                 ReadMoney(reader, 7),
                 ReadMoney(reader, 8),
-                ReadMoney(reader, 9),
+                shiftElectronic,
                 reader.GetInt32(10),
                 reader.IsDBNull(11) ? null : DateTimeOffset.Parse(reader.GetString(11), CultureInfo.InvariantCulture),
                 reader.GetString(12),
