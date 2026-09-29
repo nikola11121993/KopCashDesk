@@ -43,6 +43,10 @@ public static class CrossSourceShiftExtensions
     private const string AutomaticMatchKind = "AutomaticExactMoneyWithinTolerance";
     private const string AutomaticConflictReason = "NearTimeMoneyMismatch";
 
+    private sealed record RebuildCacheState(long Revision, int MatchedPairs, int Conflicts);
+    private static readonly object RebuildCacheGate = new();
+    private static readonly Dictionary<string, RebuildCacheState> RebuildCache = new(StringComparer.OrdinalIgnoreCase);
+
     private sealed record Observation(
         string Id,
         string Source,
@@ -70,6 +74,14 @@ public static class CrossSourceShiftExtensions
         if (toleranceSeconds < 0) throw new ArgumentOutOfRangeException(nameof(toleranceSeconds));
 
         using var db = Open(database);
+        var revision = ReadShiftRevision(db);
+        var cacheKey = $"{System.IO.Path.GetFullPath(database.Path)}|{toleranceSeconds}";
+        lock (RebuildCacheGate)
+        {
+            if (RebuildCache.TryGetValue(cacheKey, out var cached) && cached.Revision == revision)
+                return new(cached.MatchedPairs, 0, cached.Conflicts, 0);
+        }
+
         using var tx = db.BeginTransaction();
         var observations = ReadObservations(db, tx);
         var existingMatchCreated = ReadExistingCreatedAt(db, tx, "shift_source_links", "id");
@@ -159,6 +171,8 @@ public static class CrossSourceShiftExtensions
             desiredConflictIds.SetEquals(existingConflictCreated.Keys))
         {
             tx.Commit();
+            lock (RebuildCacheGate)
+                RebuildCache[cacheKey] = new(revision, desiredMatches.Count, desiredConflicts.Count);
             return new(desiredMatches.Count, 0, desiredConflicts.Count, 0);
         }
 
@@ -213,7 +227,16 @@ public static class CrossSourceShiftExtensions
         }
 
         tx.Commit();
+        lock (RebuildCacheGate)
+            RebuildCache[cacheKey] = new(revision, desiredMatches.Count, desiredConflicts.Count);
         return new(desiredMatches.Count, newMatches, desiredConflicts.Count, newConflicts);
+    }
+
+    private static long ReadShiftRevision(SqliteConnection db)
+    {
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT revision FROM data_revisions WHERE name='shift_closures' LIMIT 1";
+        return Convert.ToInt64(command.ExecuteScalar() ?? 0L);
     }
 
     public static IReadOnlyList<CrossSourceShiftLinkView> CrossSourceShiftLinks(this Database database)
