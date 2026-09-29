@@ -6,6 +6,7 @@ using KopCashDesk.Data;
 using KopCashDesk.Desktop;
 using Microsoft.Data.Sqlite;
 using Xunit;
+using CoreLocation = KopCashDesk.Core.Location;
 
 namespace KopCashDesk.Tests;
 
@@ -33,7 +34,7 @@ public sealed class GarantMayCorrectionTests
             db.Initialize();
 
             var org = new Organization(Guid.NewGuid(), "ООО ГАРАНТ", KnownBusinessRules.GarantTaxId);
-            var dvvs = new Location(Guid.NewGuid(), org.Id, KnownBusinessRules.GarantDvvsPointName, "Екатеринбург, ул. Универсиады, 11");
+            var dvvs = new CoreLocation(Guid.NewGuid(), org.Id, KnownBusinessRules.GarantDvvsPointName, "Екатеринбург, ул. Универсиады, 11");
             db.Save(org);
             db.Save(dvvs);
             KnownBusinessRules.ApplyPending(db);
@@ -74,7 +75,7 @@ public sealed class GarantMayCorrectionTests
             db.Initialize();
 
             var org = new Organization(Guid.NewGuid(), "ООО ГАРАНТ", KnownBusinessRules.GarantTaxId);
-            var dvvs = new Location(Guid.NewGuid(), org.Id, KnownBusinessRules.GarantDvvsPointName, "Екатеринбург, ул. Универсиады, 11");
+            var dvvs = new CoreLocation(Guid.NewGuid(), org.Id, KnownBusinessRules.GarantDvvsPointName, "Екатеринбург, ул. Универсиады, 11");
             db.Save(org);
             db.Save(dvvs);
 
