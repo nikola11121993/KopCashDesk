@@ -47,6 +47,12 @@ public sealed class GarantDvvsRegisterSummaryTests
             Assert.Equal(2500m, row.Kassa2Electronic);
             Assert.Equal(300m, row.SpareElectronic);
             Assert.Equal(7800m, row.TotalElectronic);
+
+            var registers = db.GarantDvvsRegisterRevenueSummaries(2026, 4, organization.Id, point.Id);
+            Assert.Equal(3, registers.Count);
+            Assert.Equal(5000m, Assert.Single(registers, x => x.KktSerial == KnownBusinessRules.GarantDvvs1Serial).Electronic);
+            Assert.Equal(2500m, Assert.Single(registers, x => x.KktSerial == KnownBusinessRules.GarantDvvs2Serial).Electronic);
+            Assert.Equal(300m, Assert.Single(registers, x => x.KktSerial == KnownBusinessRules.GarantDvvsSpareSerial).Electronic);
         }
         finally
         {
