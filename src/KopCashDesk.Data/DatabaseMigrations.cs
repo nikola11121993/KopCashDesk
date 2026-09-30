@@ -4,7 +4,7 @@ namespace KopCashDesk.Data;
 
 internal static class DatabaseMigrations
 {
-    public const long CurrentVersion = 4;
+    public const long CurrentVersion = 7;
 
     public static void Apply(Database database)
     {
@@ -20,7 +20,9 @@ internal static class DatabaseMigrations
         if (version > CurrentVersion)
             throw new InvalidOperationException("Версия базы данных новее этой программы. Обновите программу.");
 
-        if (version < CurrentVersion)
+        // v7 only adds indexes; avoid copying a large database just to build read-only indexes.
+        // Older migrations can change stored structure/data and still receive a safety backup.
+        if (version < CurrentVersion && version < 6)
             database.BackupBeforeMigration(version);
 
         if (version < 2)
@@ -29,11 +31,35 @@ internal static class DatabaseMigrations
             MigrateToV3(db);
         if (version < 4)
             RegisterSchemaMigration.Apply(db);
+        if (version < 5)
+            MigrateToV5(db);
+        if (version < 6)
+            MigrateToV6(db);
+        if (version < 7)
+            MigrateToV7(db);
+
+        EnsureRevisionInfrastructure(db);
+
+        // Refresh SQLite planner statistics after schema/index changes.
+        using (var optimize = db.CreateCommand())
+        {
+            optimize.CommandText = "PRAGMA optimize;";
+            optimize.ExecuteNonQuery();
+        }
 
         // Data-only business rules are intentionally idempotent and remain outside the schema version.
         // This lets an already-v4 database receive corrected hard KKT bindings without rebuilding tables.
         KnownBusinessRules.ApplyPending(database);
-        database.RepairSberOverlappingImports();
+        RegisterBindingService.RepairDuplicatePhysicalRegisters(database);
+
+        // Expensive consistency rebuilds run once when an existing database first reaches v6.
+        // Importers perform the same maintenance after new files are added, so normal startup
+        // and every summary refresh no longer rescan the entire history.
+        if (version < 6)
+        {
+            database.RebuildCrossSourceShiftMatches();
+            database.RepairSberOverlappingImports();
+        }
     }
 
     private static void MigrateToV2(SqliteConnection db)
@@ -186,6 +212,157 @@ internal static class DatabaseMigrations
         }
 
         tx.Commit();
+    }
+
+    private static void MigrateToV5(SqliteConnection db)
+    {
+        using var tx = db.BeginTransaction();
+
+        // Large databases spend most of their time grouping ISO-8601 timestamps by day
+        // and resolving source/external-id pairs. Expression/covering indexes avoid full scans
+        // without changing the existing data model or deleting historical rows.
+        Execute(db, tx, """
+            CREATE INDEX IF NOT EXISTS ix_operations_day_summary
+                ON operations(organization_id, location_id, substr(occurred_at,1,10), source_kind, payment, amount_kopecks);
+            CREATE INDEX IF NOT EXISTS ix_operations_source_external_role
+                ON operations(source, external_id, source_kind);
+            CREATE INDEX IF NOT EXISTS ix_operations_location_time
+                ON operations(organization_id, location_id, occurred_at);
+
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_day_summary
+                ON shift_closures(organization_id, location_id, substr(closed_at,1,10), source);
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_source_external
+                ON shift_closures(source, external_id);
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_register_match
+                ON shift_closures(organization_id, location_id, source, fn, shift_number, closed_at);
+
+            CREATE INDEX IF NOT EXISTS ix_source_documents_hash
+                ON source_documents(sha256);
+            """);
+
+        using (var version = db.CreateCommand())
+        {
+            version.Transaction = tx;
+            version.CommandText = "UPDATE schema_version SET version=5";
+            version.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','4 -> 5: large database indexes')";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void MigrateToV6(SqliteConnection db)
+    {
+        using var tx = db.BeginTransaction();
+
+        // Summary screens commonly filter by organization + date while showing all locations.
+        // These indexes keep those reads on a narrow time range instead of scanning a whole large database.
+        Execute(db, tx, """
+            CREATE INDEX IF NOT EXISTS ix_operations_org_time_summary
+                ON operations(organization_id, occurred_at, source_kind, payment, location_id, amount_kopecks);
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_org_time_summary
+                ON shift_closures(organization_id, closed_at, location_id, source, total_kopecks, cash_kopecks, electronic_kopecks);
+            """);
+
+        using (var version = db.CreateCommand())
+        {
+            version.Transaction = tx;
+            version.CommandText = "UPDATE schema_version SET version=6";
+            version.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','5 -> 6: organization/date summary indexes')";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void MigrateToV7(SqliteConnection db)
+    {
+        using var tx = db.BeginTransaction();
+
+        // Read-only performance upgrade. No business logic, UI or stored values change.
+        // Partial covering indexes keep daily/monthly summaries and per-KKT views off full table scans.
+        Execute(db, tx, """
+            CREATE INDEX IF NOT EXISTS ix_operations_bank_period_cover
+                ON operations(organization_id, location_id, occurred_at, payment, amount_kopecks)
+                WHERE source_kind='Bank' AND location_id IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS ix_operations_fiscal_period_cover
+                ON operations(organization_id, location_id, occurred_at, payment, amount_kopecks)
+                WHERE source_kind='Fiscal' AND location_id IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS ix_operations_taxcom_register_period
+                ON operations(organization_id, location_id, kkt_serial, registration_number, occurred_at, payment, amount_kopecks)
+                WHERE source='Taxcom.FiscalDocuments' AND source_kind='Fiscal';
+
+            CREATE INDEX IF NOT EXISTS ix_operations_source_document
+                ON operations(document_id, source, organization_id, location_id);
+
+            CREATE INDEX IF NOT EXISTS ix_register_bindings_active_identity
+                ON register_bindings(organization_id, is_active, kkt_serial, register_number, location_id);
+
+            CREATE INDEX IF NOT EXISTS ix_shift_closures_period_cover
+                ON shift_closures(organization_id, location_id, closed_at, source, total_kopecks, cash_kopecks, electronic_kopecks);
+            """);
+
+        using (var version = db.CreateCommand())
+        {
+            version.Transaction = tx;
+            version.CommandText = "UPDATE schema_version SET version=7";
+            version.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'schema.migrate','6 -> 7: read-performance covering indexes; no UI or accounting logic changes')";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void EnsureRevisionInfrastructure(SqliteConnection db)
+    {
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS data_revisions(
+                name TEXT PRIMARY KEY,
+                revision INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO data_revisions(name,revision) VALUES('shift_closures',0);
+
+            CREATE TRIGGER IF NOT EXISTS trg_shift_revision_insert
+            AFTER INSERT ON shift_closures
+            BEGIN
+                UPDATE data_revisions SET revision=revision+1 WHERE name='shift_closures';
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_shift_revision_update
+            AFTER UPDATE ON shift_closures
+            BEGIN
+                UPDATE data_revisions SET revision=revision+1 WHERE name='shift_closures';
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_shift_revision_delete
+            AFTER DELETE ON shift_closures
+            BEGIN
+                UPDATE data_revisions SET revision=revision+1 WHERE name='shift_closures';
+            END;
+            """;
+        command.ExecuteNonQuery();
     }
 
     private static void NormalizeTaxIds(SqliteConnection db, SqliteTransaction tx)

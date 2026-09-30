@@ -549,10 +549,14 @@ public sealed class UnifiedImportWindow : Window
 
         var taxcomCore = new[] { "дата закрытия", "№ смены", "выручка нал.", "выручка безнал." };
         var taxcomIdentity = new[] { "название ккт", "зав. № фн", "рег. № ккт", "зав. № ккт" };
+        var compactTaxcomCore = new[] { "дата/время закрытия смены", "номер смены", "выручка наличными", "выручка безналичными" };
+        var compactTaxcomIdentity = new[] { "название магазина", "название кассы", "номер фн", "рнм" };
         var taxcomTitle = seen.Contains("такском-касса") ||
                           seen.Contains("сводный отчет по сменам") ||
                           normalizedName.Contains("сводный отчет по сменам", StringComparison.Ordinal);
-        if (taxcomCore.All(seen.Contains) && (taxcomTitle || taxcomIdentity.Any(seen.Contains)))
+        var classicTaxcom = taxcomCore.All(seen.Contains) && (taxcomTitle || taxcomIdentity.Any(seen.Contains));
+        var compactTaxcom = compactTaxcomCore.All(seen.Contains) && compactTaxcomIdentity.Count(seen.Contains) >= 2;
+        if (classicTaxcom || compactTaxcom)
             return UnifiedImportKind.Taxcom;
 
         var sberCore = new[] { "инн", "наименование тст", "номер терминала", "дата операции", "сумма операции" };

@@ -2,9 +2,9 @@
   <Application.Resources>
     <SolidColorBrush x:Key="AccentBrush" Color="#176B5B" />
     <SolidColorBrush x:Key="SurfaceBrush" Color="#F5F7FA" />
-    <Style TargetType="Button"><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="2"/><Setter Property="MinHeight" Value="34"/></Style>
-    <Style TargetType="TextBox"><Setter Property="Padding" Value="7,5"/><Setter Property="Margin" Value="2"/><Setter Property="MinHeight" Value="30"/></Style>
-    <Style TargetType="ComboBox"><Setter Property="Margin" Value="2"/><Setter Property="MinHeight" Value="30"/></Style>
-    <Style TargetType="DataGrid"><Setter Property="AutoGenerateColumns" Value="False"/><Setter Property="CanUserAddRows" Value="False"/><Setter Property="SelectionMode" Value="Single"/><Setter Property="GridLinesVisibility" Value="Horizontal"/><Setter Property="HeadersVisibility" Value="Column"/><Setter Property="RowHeight" Value="32"/><Setter Property="ColumnHeaderHeight" Value="36"/></Style>
+    <Style TargetType="Button"><Setter Property="FontSize" Value="10"/><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="2"/><Setter Property="MinHeight" Value="32"/></Style>
+    <Style TargetType="TextBox"><Setter Property="FontSize" Value="10"/><Setter Property="Padding" Value="7,5"/><Setter Property="Margin" Value="2"/><Setter Property="MinHeight" Value="28"/></Style>
+    <Style TargetType="ComboBox"><Setter Property="FontSize" Value="10"/><Setter Property="Margin" Value="2"/><Setter Property="MinHeight" Value="28"/></Style>
+    <Style TargetType="DataGrid"><Setter Property="FontSize" Value="10"/><Setter Property="AutoGenerateColumns" Value="False"/><Setter Property="CanUserAddRows" Value="False"/><Setter Property="SelectionMode" Value="Single"/><Setter Property="GridLinesVisibility" Value="Horizontal"/><Setter Property="HeadersVisibility" Value="Column"/><Setter Property="RowHeight" Value="29"/><Setter Property="ColumnHeaderHeight" Value="33"/><Setter Property="EnableRowVirtualization" Value="True"/><Setter Property="EnableColumnVirtualization" Value="True"/><Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/><Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/></Style>
   </Application.Resources>
 </Application>

@@ -88,6 +88,51 @@ public sealed class TaxcomShiftReportImportTests
         }
     }
 
+
+    [Fact]
+    public void CompactShiftReport_ResolvesOrganizationAndPoint_WithoutInnInFileName()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"kopcashdesk-taxcom-compact-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        var report = Path.Combine(folder, "45624181__2026__09__01__2026__09__24.xlsx");
+        var databasePath = Path.Combine(folder, "cashdesk.db");
+
+        try
+        {
+            CreateCompactWorkbook(report);
+            var database = new Database(databasePath);
+            database.Initialize();
+            var organization = new Organization(Guid.NewGuid(), "ООО \"ГАРАНТ\"", "6683011158");
+            var location = new CoreLocation(Guid.NewGuid(), organization.Id, "кафе ЦХиЭГ", "Свердловская область, Екатеринбург, ул. Лучистая, 16");
+            database.Save(organization);
+            database.Save(location);
+
+            var result = new TaxcomShiftReportImporter(database).ImportFiles([report]);
+
+            Assert.Equal(1, result.FilesProcessed);
+            Assert.Equal(2, result.ShiftsProcessed);
+            Assert.Equal(4, result.FiscalOperationsInserted);
+            var binding = Assert.Single(database.RegisterBindings());
+            Assert.Equal(location.Id, binding.LocationId);
+            Assert.Equal("7381440901098990", binding.FiscalDriveNumber);
+            Assert.Equal("0008339426038157", binding.RegisterNumber);
+
+            var days = database.PointDaySummaries(organization.Id, 2026, 9, location.Id);
+            Assert.Equal(2, days.Count);
+            Assert.Equal(13550m, Assert.Single(days, x => x.Date == new DateOnly(2026, 9, 2)).FiscalElectronic);
+            Assert.Equal(16635m, Assert.Single(days, x => x.Date == new DateOnly(2026, 9, 3)).FiscalElectronic);
+
+            var repeat = new TaxcomShiftReportImporter(database).ImportFiles([report]);
+            Assert.Equal(0, repeat.FiscalOperationsInserted);
+            Assert.Equal(4, repeat.FiscalOperationsUpdated);
+        }
+        finally
+        {
+            try { Directory.Delete(folder, true); }
+            catch { }
+        }
+    }
+
     private static void CreateWorkbook(string path)
     {
         using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
@@ -119,6 +164,44 @@ public sealed class TaxcomShiftReportImportTests
             Id = workbookPart.GetIdOfPart(worksheetPart),
             SheetId = 1,
             Name = "Смены"
+        });
+        workbookPart.Workbook.Save();
+    }
+
+
+    private static void CreateCompactWorkbook(string path)
+    {
+        using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
+        var workbookPart = document.AddWorkbookPart();
+        workbookPart.Workbook = new Workbook();
+        var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+        var data = new SheetData();
+        worksheetPart.Worksheet = new Worksheet(data);
+
+        data.Append(TextRow(1, ["Информация"]));
+        data.Append(TextRow(2,
+        [
+            "Название магазина", "Название кассы", "Адрес регистрации кассы", "РНМ", "Номер ФН",
+            "Номер смены", "Дата/время закрытия смены", "Выручка наличными", "Выручка безналичными", "Выручка итого"
+        ]));
+        data.Append(MixedRow(3,
+        [
+            "ООО \"ГАРАНТ\"", "Кафе ЦХиЭГ", "620103,Свердловская обл.г.Екатеринбург,ул.Лучистая,стр.16",
+            "0008339426038157", "7381440901098990", "165", "46267.81527777778", "100", "13550", "13650"
+        ]));
+        data.Append(MixedRow(4,
+        [
+            "ООО \"ГАРАНТ\"", "Кафе ЦХиЭГ", "620103,Свердловская обл.г.Екатеринбург,ул.Лучистая,стр.16",
+            "0008339426038157", "7381440901098990", "166", "46268.82430555556", "1060", "16635", "17695"
+        ]));
+        worksheetPart.Worksheet.Save();
+
+        var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+        sheets.Append(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(worksheetPart),
+            SheetId = 1,
+            Name = "Лист_1"
         });
         workbookPart.Workbook.Save();
     }

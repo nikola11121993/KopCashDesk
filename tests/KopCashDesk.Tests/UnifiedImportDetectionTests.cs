@@ -88,6 +88,47 @@ public sealed class UnifiedImportDetectionTests
         }
     }
 
+
+    [Fact]
+    public void CompactTaxcomShiftExport_IsDetectedAsTaxcom()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "KopCashDesk.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "45624181__2026__09__01__2026__09__24.xlsx");
+
+        try
+        {
+            using (var document = SpreadsheetDocument.Create(path, DocumentFormat.OpenXml.SpreadsheetDocumentType.Workbook))
+            {
+                var workbookPart = document.AddWorkbookPart();
+                workbookPart.Workbook = new Workbook();
+                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+                var data = new SheetData();
+                worksheetPart.Worksheet = new Worksheet(data);
+
+                data.Append(RowOf(1, "Информация"));
+                data.Append(RowOf(2,
+                    "Название магазина", "Название кассы", "Адрес регистрации кассы", "РНМ", "Номер ФН",
+                    "Номер смены", "Дата/время закрытия смены", "Выручка наличными", "Выручка безналичными", "Выручка итого"));
+
+                var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+                sheets.Append(new Sheet
+                {
+                    Id = workbookPart.GetIdOfPart(worksheetPart),
+                    SheetId = 1,
+                    Name = "Лист_1"
+                });
+                workbookPart.Workbook.Save();
+            }
+
+            Assert.Equal(UnifiedImportKind.Taxcom, UnifiedImportWindow.Detect(path));
+        }
+        finally
+        {
+            try { Directory.Delete(folder, true); } catch { }
+        }
+    }
+
     private static Row RowOf(uint index, params string[] values)
     {
         var row = new Row { RowIndex = index };

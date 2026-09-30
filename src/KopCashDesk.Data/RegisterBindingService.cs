@@ -96,18 +96,35 @@ public static class RegisterBindingService
         }
         if (selected is not null)
         {
-            // Enrich identity without altering manual provenance/validity. A new FN is a new observation identity.
-            if (selected.FiscalDriveNumber.Length > 0 && fn.Length > 0 && selected.FiscalDriveNumber != fn)
-                selected = selected with { Id = Guid.NewGuid(), FiscalDriveNumber = fn, CreatedAt = null, UpdatedAt = null };
-            selected = selected with
+            if (selected.LocationId is null && selected.BindingSource == BindingSource.Automatic && !selected.IsLocked && !IsGenericPoint(point))
+            {
+                var pointKey = Normalize(point);
+                var matches = locations.Where(l => Normalize(l.Name) == pointKey || (l.Address.Length > 0 && Normalize(l.Address) == pointKey)).ToArray();
+                if (matches.Length == 1)
+                    selected = selected with { LocationId = matches[0].Id };
+            }
+
+            // The physical KKT is identified primarily by its factory serial number (and, when needed, RNM).
+            // Replacing a fiscal drive does NOT create another physical cash register.
+            // Keep one active binding and return the observed FN only for the imported source row.
+            var persisted = selected with
             {
                 KktSerial = serial.Length > 0 ? serial : selected.KktSerial,
-                FiscalDriveNumber = fn.Length > 0 ? fn : selected.FiscalDriveNumber,
                 RegisterNumber = rnm.Length > 0 ? rnm : selected.RegisterNumber,
-                DisplayName = display.Length > 0 ? display : selected.DisplayName
+                DisplayName = display.Length > 0 ? display : selected.DisplayName,
+                FiscalDriveNumber = selected.FiscalDriveNumber.Length == 0 && fn.Length > 0
+                    ? fn
+                    : selected.FiscalDriveNumber
             };
-            Save(database, selected);
-            return selected;
+            Save(database, persisted);
+
+            return persisted with
+            {
+                FiscalDriveNumber = fn.Length > 0 ? fn : persisted.FiscalDriveNumber,
+                KktSerial = serial.Length > 0 ? serial : persisted.KktSerial,
+                RegisterNumber = rnm.Length > 0 ? rnm : persisted.RegisterNumber,
+                DisplayName = display.Length > 0 ? display : persisted.DisplayName
+            };
         }
 
         if (knownPointName is not null)
@@ -224,6 +241,112 @@ public static class RegisterBindingService
         }
         tx.Commit(); database.RebuildCrossSourceShiftMatches();
     }
+    public static int RepairDuplicatePhysicalRegisters(Database database)
+    {
+        using var db = Open(database);
+        using var tx = db.BeginTransaction();
+        var active = Read(db, tx, true).Where(x => x.IsActive).ToArray();
+        var archived = 0;
+
+        var groups = active
+            .Select(x => new
+            {
+                Binding = x,
+                Key = x.KktSerial.Length > 0
+                    ? $"serial:{Digits(x.KktSerial)}"
+                    : x.RegisterNumber.Length > 0
+                        ? $"rnm:{Digits(x.RegisterNumber)}"
+                        : string.Empty
+            })
+            .Where(x => x.Key.Length > 0)
+            .GroupBy(x => (x.Binding.OrganizationId, x.Key));
+
+        foreach (var group in groups)
+        {
+            var rows = group.Select(x => x.Binding).ToArray();
+            if (rows.Length < 2) continue;
+
+            // Prefer an assigned, protected/manual binding as the physical KKT row.
+            var canonical = rows
+                .OrderByDescending(x => x.LocationId is not null)
+                .ThenByDescending(x => x.BindingSource == BindingSource.Manual || x.IsLocked)
+                .ThenByDescending(x => (int)x.BindingSource)
+                .ThenByDescending(x => x.UpdatedAt ?? DateTimeOffset.MinValue)
+                .First();
+
+            foreach (var duplicate in rows.Where(x => x.Id != canonical.Id))
+            {
+                if (!Overlaps(canonical, duplicate)) continue;
+
+                // Different explicitly assigned locations can represent a real dated move.
+                if (canonical.LocationId is Guid canonicalLocation &&
+                    duplicate.LocationId is Guid duplicateLocation &&
+                    canonicalLocation != duplicateLocation)
+                    continue;
+
+                var targetLocation = canonical.LocationId ?? duplicate.LocationId;
+                if (canonical.LocationId is null && targetLocation is not null)
+                {
+                    var oldCanonical = canonical;
+                    canonical = canonical with { LocationId = targetLocation };
+                    Write(db, tx, canonical, oldCanonical);
+                }
+
+                if (targetLocation is Guid location)
+                {
+                    foreach (var table in new[] { "shift_closures", "operations" })
+                    {
+                        using var update = db.CreateCommand();
+                        update.Transaction = tx;
+                        var timeColumn = table == "shift_closures" ? "closed_at" : "occurred_at";
+                        update.CommandText = $"""
+                            UPDATE {table}
+                            SET location_id=$loc
+                            WHERE organization_id=$org
+                              AND (location_id IS NULL OR location_id=$duplicateLoc)
+                              AND ($from IS NULL OR substr({timeColumn},1,10)>=$from)
+                              AND ($to IS NULL OR substr({timeColumn},1,10)<=$to)
+                              AND (
+                                   ($serial<>'' AND kkt_serial=$serial)
+                                   OR ($serial='' AND $rnm<>'' AND registration_number=$rnm)
+                              )
+                              {(table == "operations" ? "AND source_kind<>'Bank'" : "")};
+                            """;
+                        update.Parameters.AddWithValue("$loc", location.ToString());
+                        update.Parameters.AddWithValue("$org", canonical.OrganizationId.ToString());
+                        update.Parameters.AddWithValue("$duplicateLoc", (object?)duplicate.LocationId?.ToString() ?? DBNull.Value);
+                        update.Parameters.AddWithValue("$from", (object?)duplicate.ValidFrom?.ToString("yyyy-MM-dd") ?? DBNull.Value);
+                        update.Parameters.AddWithValue("$to", (object?)duplicate.ValidTo?.ToString("yyyy-MM-dd") ?? DBNull.Value);
+                        update.Parameters.AddWithValue("$serial", canonical.KktSerial);
+                        update.Parameters.AddWithValue("$rnm", canonical.RegisterNumber);
+                        update.ExecuteNonQuery();
+                    }
+                }
+
+                Write(db, tx, duplicate with { IsActive = false }, duplicate);
+                archived++;
+            }
+        }
+
+        if (archived > 0)
+        {
+            using var clear = db.CreateCommand();
+            clear.Transaction = tx;
+            clear.CommandText = "DELETE FROM reconciliation_allocations;";
+            clear.ExecuteNonQuery();
+
+            using var audit = db.CreateCommand();
+            audit.Transaction = tx;
+            audit.CommandText = "INSERT INTO audit_log(occurred_at,action,details) VALUES($t,'register.duplicate_repair',$d)";
+            audit.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+            audit.Parameters.AddWithValue("$d", $"archived={archived}; physical KKT deduplicated by serial/RNM; FN changes preserved in source rows and archive");
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+        return archived;
+    }
+
     private static void Validate(SqliteConnection db, SqliteTransaction tx, RegisterBinding b)
     {
         if (b.FiscalDriveNumber.Length == 0 && b.KktSerial.Length == 0 && b.RegisterNumber.Length == 0) throw new InvalidOperationException("Укажите заводской номер ККТ, ФН или РНМ.");

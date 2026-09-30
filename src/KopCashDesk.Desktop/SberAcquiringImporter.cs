@@ -223,7 +223,7 @@ public sealed class SberAcquiringImporter
             var requestNumber = Get(values, "Номер запроса");
             var extraTransactionId = Get(values, "Доп. информация_2");
             var externalId = BuildExternalId(taxId, terminalId, merchantId, rrn, occurredAt, amount, requestNumber, extraTransactionId);
-            var inserted = _database.Insert(new CashOperation(
+            var inserted = _database.UpsertBankOperation(new CashOperation(
                 Source,
                 externalId,
                 organization.Id,
@@ -267,14 +267,21 @@ public sealed class SberAcquiringImporter
 
     private Location ResolveLocation(Organization organization, string pointName, string address, string terminalId, SberImportSummary summary)
     {
+        var organizationLocations = _locations.Where(x => x.OrganizationId == organization.Id).ToArray();
+
+        var knownPointName = KnownBusinessRules.PointNameForTerminal(organization.TaxId, terminalId);
+        if (knownPointName is not null)
+        {
+            var knownPoint = KnownBusinessRules.FindKnownPoint(organizationLocations, knownPointName);
+            if (knownPoint is not null) return knownPoint;
+        }
+
         var terminalKey = TerminalKey(organization.Id, terminalId);
         if (_terminals.TryGetValue(terminalKey, out var existingTerminal))
         {
             var bound = _locations.FirstOrDefault(x => x.Id == existingTerminal.LocationId);
             if (bound is not null) return bound;
         }
-
-        var organizationLocations = _locations.Where(x => x.OrganizationId == organization.Id).ToArray();
         var addressKey = NormalizeForMatch(address);
         var nameKey = NormalizeForMatch(pointName);
         Location? found = null;

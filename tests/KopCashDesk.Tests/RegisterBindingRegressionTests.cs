@@ -53,11 +53,44 @@ public sealed class RegisterBindingRegressionTests
         Assert.Equal(BindingSource.Manual, Assert.Single(f.Db.RegisterBindings()).BindingSource);
     }
     [Fact]
-    public void SerialBinding_SurvivesFnReplacement()
+    public void SerialBinding_SurvivesFnReplacement_WithoutCreatingAnotherPhysicalKkt()
     {
         using var f = new Fixture(); f.Db.SaveRegisterBinding(new(Guid.NewGuid(), f.Org.Id, f.Point.Id, "991", KktSerial: "111"));
         f.Import("Касса", "111", "992", 100);
+
         Assert.Equal(f.Point.Id, Assert.Single(f.Db.PointDaySummaries()).LocationId);
+        var binding = Assert.Single(f.Db.RegisterBindings());
+        Assert.Equal("111", binding.KktSerial);
+        Assert.Equal("991", binding.FiscalDriveNumber);
+        Assert.Equal("992", Assert.Single(f.Db.ShiftDetails(f.Org.Id, f.Point.Id)).Fn);
+    }
+
+    [Fact]
+    public void DuplicateActiveBindings_ForSameSerial_AreArchivedAndUnassignedFiscalRowsMoveToCanonicalPoint()
+    {
+        using var f = new Fixture();
+        var canonical = new RegisterBinding(Guid.NewGuid(), f.Org.Id, f.Point.Id, "991", "12345", BindingSource.Rule, true, KktSerial: "111", DisplayName: "Касса 1");
+        var duplicate = new RegisterBinding(Guid.NewGuid(), f.Org.Id, null, "992", "12345", BindingSource.Automatic, false, KktSerial: "111", DisplayName: "Касса 1");
+        f.Db.SaveRegisterBinding(canonical);
+        f.Db.SaveRegisterBinding(duplicate);
+        f.Db.UpsertFiscalOperation(new(
+            "Taxcom.FiscalDocuments", "doc:electronic", f.Org.Id, null,
+            new DateTimeOffset(2026, 9, 10, 12, 0, 0, TimeSpan.FromHours(5)),
+            SourceKind.Fiscal, OperationKind.Sale, PaymentKind.Electronic, 500,
+            FiscalDriveNumber: "992", KktSerial: "111", RegistrationNumber: "12345", RegisterDisplayName: "Касса 1"));
+
+        Assert.Equal(2, f.Db.RegisterBindings().Count);
+        Assert.Equal(1, RegisterBindingService.RepairDuplicatePhysicalRegisters(f.Db));
+
+        var active = Assert.Single(f.Db.RegisterBindings());
+        Assert.Equal(canonical.Id, active.Id);
+        Assert.Equal(f.Point.Id, active.LocationId);
+        Assert.Equal(2, RegisterBindingService.Read(f.Db, true).Count);
+        Assert.Single(RegisterBindingService.Read(f.Db, true), x => !x.IsActive && x.Id == duplicate.Id);
+
+        var day = Assert.Single(f.Db.PointDaySummaries());
+        Assert.Equal(f.Point.Id, day.LocationId);
+        Assert.Equal(500m, day.FiscalElectronic);
     }
     [Fact]
     public void RnmBinding_ResolvesWhenFnAndSerialAreMissing()

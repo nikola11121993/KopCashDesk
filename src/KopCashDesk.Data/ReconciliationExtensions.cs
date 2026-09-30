@@ -114,23 +114,11 @@ public static class ReconciliationExtensions
         using var db = Open(database);
         using var transaction = db.BeginTransaction();
 
-        var bankDays = ReadBankDays(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-        var fiscalEvents = ReadFiscalEvents(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-        var frontolConflictFallbackEvents = ReadFrontolConflictFallbackEvents(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-        var manualEvents = ReadManualEvents(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-        var shifts = ReadShiftMeta(db, transaction, organization.Id, location.Id)
-            .Where(x => year is null || x.Date.Year == year)
-            .ToList();
-
-        DeleteAllocations(db, transaction, organization.Id, location.Id);
+        var bankDays = ReadBankDays(db, transaction, organization.Id, location.Id, year);
+        var fiscalEvents = ReadFiscalEvents(db, transaction, organization.Id, location.Id, year);
+        var frontolConflictFallbackEvents = ReadFrontolConflictFallbackEvents(db, transaction, organization.Id, location.Id, year);
+        var manualEvents = ReadManualEvents(db, transaction, organization.Id, location.Id, year);
+        var shifts = ReadShiftMeta(db, transaction, organization.Id, location.Id, year);
 
         var conflicts = database.CrossSourceConflictDates(organization.Id, location.Id)
             .Where(x => year is null || x.Year == year)
@@ -257,7 +245,7 @@ public static class ReconciliationExtensions
         foreach (var credit in returnCredits)
             if (credit.RemainingKopecks > 0) reviewDates.Add(credit.Date);
 
-        PersistAllocations(db, transaction, organization.Id, location.Id, allocations);
+        SyncAllocations(db, transaction, organization.Id, location.Id, allocations, year);
         var result = BuildRows(
             organization, location, dates, bankByDate, cashByDate, shiftByDate,
             allocations, priorOutstanding, endOutstanding, unmatchedCash, reviewDates);
@@ -406,7 +394,7 @@ public static class ReconciliationExtensions
         return "Нет данных";
     }
 
-    private static List<BankDay> ReadBankDays(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
+    private static List<BankDay> ReadBankDays(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, int? year)
     {
         var result = new Dictionary<DateOnly, BankDay>();
 
@@ -416,12 +404,13 @@ public static class ReconciliationExtensions
             command.CommandText = """
                 SELECT substr(occurred_at,1,10),SUM(amount_kopecks),COUNT(*)
                 FROM operations
-                WHERE organization_id=$org AND location_id=$loc AND source_kind='Bank' AND payment='Electronic'
+                WHERE organization_id=$org AND location_id=$loc AND source_kind='Bank' AND payment='Electronic' AND ($year IS NULL OR substr(occurred_at,1,4)=$year)
                 GROUP BY substr(occurred_at,1,10)
                 ORDER BY substr(occurred_at,1,10)
                 """;
             command.Parameters.AddWithValue("$org", organizationId.ToString());
             command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -436,11 +425,12 @@ public static class ReconciliationExtensions
             command.CommandText = """
                 SELECT business_date,electronic_kopecks
                 FROM manual_terminal_postings
-                WHERE organization_id=$org AND location_id=$loc
+                WHERE organization_id=$org AND location_id=$loc AND ($year IS NULL OR substr(business_date,1,4)=$year)
                 ORDER BY business_date
                 """;
             command.Parameters.AddWithValue("$org", organizationId.ToString());
             command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -452,18 +442,19 @@ public static class ReconciliationExtensions
         return result.Values.OrderBy(x => x.Date).ToList();
     }
 
-    private static List<CashEvent> ReadFiscalEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
+    private static List<CashEvent> ReadFiscalEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, int? year)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             SELECT substr(occurred_at,1,10),source,external_id,amount_kopecks,occurred_at
             FROM canonical_fiscal_operations
-            WHERE organization_id=$org AND location_id=$loc AND payment='Electronic'
+            WHERE organization_id=$org AND location_id=$loc AND payment='Electronic' AND ($year IS NULL OR substr(occurred_at,1,4)=$year)
             ORDER BY occurred_at,source,external_id
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
         var result = new List<CashEvent>();
         while (reader.Read())
@@ -475,7 +466,8 @@ public static class ReconciliationExtensions
         SqliteConnection db,
         SqliteTransaction tx,
         Guid organizationId,
-        Guid locationId)
+        Guid locationId,
+        int? year)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
@@ -486,11 +478,12 @@ public static class ReconciliationExtensions
               AND location_id=$loc
               AND source='Frontol.Report'
               AND source_kind='FiscalConflict'
-              AND payment='Electronic'
+              AND payment='Electronic' AND ($year IS NULL OR substr(occurred_at,1,4)=$year)
             ORDER BY occurred_at,external_id
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
 
         var result = new List<CashEvent>();
@@ -504,18 +497,19 @@ public static class ReconciliationExtensions
         return result;
     }
 
-    private static List<CashEvent> ReadManualEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
+    private static List<CashEvent> ReadManualEvents(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, int? year)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             SELECT business_date,electronic_kopecks,updated_at
             FROM manual_cash_postings
-            WHERE organization_id=$org AND location_id=$loc
+            WHERE organization_id=$org AND location_id=$loc AND ($year IS NULL OR substr(business_date,1,4)=$year)
             ORDER BY business_date
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
         var result = new List<CashEvent>();
         while (reader.Read())
@@ -526,18 +520,19 @@ public static class ReconciliationExtensions
         return result;
     }
 
-    private static List<ShiftMeta> ReadShiftMeta(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
+    private static List<ShiftMeta> ReadShiftMeta(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId, int? year)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
             SELECT closed_at,shift_number
             FROM shift_closures
-            WHERE organization_id=$org AND location_id=$loc
+            WHERE organization_id=$org AND location_id=$loc AND ($year IS NULL OR substr(closed_at,1,4)=$year)
             ORDER BY closed_at,shift_number
             """;
         command.Parameters.AddWithValue("$org", organizationId.ToString());
         command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
         using var reader = command.ExecuteReader();
         var rows = new List<(DateTimeOffset ClosedAt, int? Number)>();
         while (reader.Read())
@@ -552,34 +547,60 @@ public static class ReconciliationExtensions
             .ToList();
     }
 
-    private static void DeleteAllocations(SqliteConnection db, SqliteTransaction tx, Guid organizationId, Guid locationId)
-    {
-        using var command = db.CreateCommand();
-        command.Transaction = tx;
-        command.CommandText = "DELETE FROM reconciliation_allocations WHERE organization_id=$org AND location_id=$loc";
-        command.Parameters.AddWithValue("$org", organizationId.ToString());
-        command.Parameters.AddWithValue("$loc", locationId.ToString());
-        command.ExecuteNonQuery();
-    }
-
-    private static void PersistAllocations(
+    private static void SyncAllocations(
         SqliteConnection db,
         SqliteTransaction tx,
         Guid organizationId,
         Guid locationId,
-        IEnumerable<PendingAllocation> allocations)
+        IEnumerable<PendingAllocation> allocations,
+        int? year)
     {
         var createdAt = DateTimeOffset.UtcNow.ToString("O");
-        foreach (var allocation in allocations.Where(x => x.AmountKopecks > 0))
-        {
-            var canonical = string.Join("|",
-                organizationId.ToString("N"), locationId.ToString("N"),
-                allocation.TerminalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                allocation.Kind, allocation.SettlementSource, allocation.SettlementExternalId,
-                allocation.SettlementDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                allocation.AmountKopecks, AlgorithmVersion);
-            var id = DeterministicGuid(canonical);
+        var desired = allocations
+            .Where(x => x.AmountKopecks > 0)
+            .Select(allocation =>
+            {
+                var canonical = string.Join("|",
+                    organizationId.ToString("N"), locationId.ToString("N"),
+                    allocation.TerminalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    allocation.Kind, allocation.SettlementSource, allocation.SettlementExternalId,
+                    allocation.SettlementDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    allocation.AmountKopecks, AlgorithmVersion);
+                return (Id: DeterministicGuid(canonical).ToString(), Allocation: allocation);
+            })
+            .ToArray();
 
+        var desiredIds = desired.Select(x => x.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT id
+                FROM reconciliation_allocations
+                WHERE organization_id=$org AND location_id=$loc
+                  AND ($year IS NULL OR substr(terminal_date,1,4)=$year)
+                """;
+            read.Parameters.AddWithValue("$org", organizationId.ToString());
+            read.Parameters.AddWithValue("$loc", locationId.ToString());
+            read.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
+            using var reader = read.ExecuteReader();
+            while (reader.Read()) existingIds.Add(reader.GetString(0));
+        }
+
+        foreach (var staleId in existingIds.Except(desiredIds, StringComparer.OrdinalIgnoreCase))
+        {
+            using var delete = db.CreateCommand();
+            delete.Transaction = tx;
+            delete.CommandText = "DELETE FROM reconciliation_allocations WHERE id=$id";
+            delete.Parameters.AddWithValue("$id", staleId);
+            delete.ExecuteNonQuery();
+        }
+
+        foreach (var item in desired.Where(x => !existingIds.Contains(x.Id)))
+        {
+            var allocation = item.Allocation;
             using var command = db.CreateCommand();
             command.Transaction = tx;
             command.CommandText = """
@@ -588,9 +609,10 @@ public static class ReconciliationExtensions
                     settlement_external_id,settlement_date,allocated_amount_kopecks,algorithm_version,created_at)
                 VALUES($id,$org,$loc,$terminal,$kind,$source,$external,$settlement,$amount,$version,$created)
                 """;
-            command.Parameters.AddWithValue("$id", id.ToString());
+            command.Parameters.AddWithValue("$id", item.Id);
             command.Parameters.AddWithValue("$org", organizationId.ToString());
             command.Parameters.AddWithValue("$loc", locationId.ToString());
+        command.Parameters.AddWithValue("$year", year is null ? DBNull.Value : year.Value.ToString(CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$terminal", allocation.TerminalDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$kind", allocation.Kind.ToString());
             command.Parameters.AddWithValue("$source", allocation.SettlementSource);
@@ -619,6 +641,15 @@ public static class ReconciliationExtensions
             ForeignKeys = true
         }.ToString());
         connection.Open();
+        using (var pragmas = connection.CreateCommand())
+        {
+            pragmas.CommandText = """
+                PRAGMA busy_timeout=5000;
+                PRAGMA temp_store=MEMORY;
+                PRAGMA cache_size=-32768;
+                """;
+            pragmas.ExecuteNonQuery();
+        }
         return connection;
     }
 
