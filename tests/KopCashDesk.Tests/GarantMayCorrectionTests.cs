@@ -25,7 +25,7 @@ public sealed class GarantMayCorrectionTests
     ];
 
     [Fact]
-    public void Dvvs_ReconciliationUsesFiscalCashlessInsteadOfInflatedRawSber()
+    public void Dvvs_ReconciliationKeepsActualSberTerminalTotalSeparateFromFiscalCashless()
     {
         var folder = NewFolder();
         try
@@ -53,7 +53,7 @@ public sealed class GarantMayCorrectionTests
 
             var row = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 5, dvvs.Id));
             Assert.Equal(55421m, row.FiscalElectronic);
-            Assert.Equal(55421m, row.BankElectronic);
+            Assert.Equal(62251m, row.BankElectronic);
         }
         finally
         {
@@ -63,7 +63,7 @@ public sealed class GarantMayCorrectionTests
     }
 
     [Fact]
-    public void Sredneuralsk_VerifiedHistoryRestoresMayTerminalTotalWithoutRawReimport()
+    public void Sredneuralsk_LegacyMayBankRowIsMovedOutOfDvvsOnBusinessRuleRepair()
     {
         var folder = NewFolder();
         try
@@ -72,18 +72,26 @@ public sealed class GarantMayCorrectionTests
             db.Initialize();
 
             var org = new Organization(Guid.NewGuid(), "ООО ГАРАНТ", KnownBusinessRules.GarantTaxId);
+            var dvvs = new CoreLocation(Guid.NewGuid(), org.Id, KnownBusinessRules.GarantDvvsPointName, "Екатеринбург, ул. Универсиады, 11");
             db.Save(org);
+            db.Save(dvvs);
+            KnownBusinessRules.ApplyPending(db);
+
+            var at = new DateTimeOffset(2026, 5, 11, 16, 17, 37, TimeSpan.FromHours(5));
+            db.Insert(new CashOperation(
+                "Sber.Acquiring", "legacy-sred-row", org.Id, dvvs.Id, at,
+                SourceKind.Bank, OperationKind.Sale, PaymentKind.Electronic, 370m));
 
             KnownBusinessRules.ApplyPending(db);
 
-            var point = Assert.Single(db.Locations(), x => x.Name == KnownBusinessRules.GarantSredneuralskPointName);
-            var may11 = Assert.Single(db.ManualTerminalPostings(org.Id, 2026, 5, point.Id));
-            Assert.Equal(new DateOnly(2026, 5, 11), may11.Date);
-            Assert.Equal(6830m, may11.Electronic);
+            var sred = Assert.Single(db.Locations(), x => x.Name == KnownBusinessRules.GarantSredneuralskPointName);
+            var operation = Assert.Single(db.Operations(org.Id));
+            Assert.Equal(KnownBusinessRules.GarantSredneuralskPointName, operation.Location);
+            Assert.Equal(370m, operation.Amount);
 
-            var summary = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 5, point.Id));
-            Assert.Equal(6830m, summary.BankElectronic);
-            Assert.Null(summary.FiscalElectronic);
+            var sredSummary = Assert.Single(db.CanonicalPointDaySummaries(org.Id, 2026, 5, sred.Id));
+            Assert.Equal(370m, sredSummary.BankElectronic);
+            Assert.Empty(db.ManualTerminalPostings(org.Id, 2026, 5, sred.Id));
         }
         finally
         {
@@ -123,6 +131,7 @@ public sealed class GarantMayCorrectionTests
             var sred = Assert.Single(db.Locations(), x => x.Name == KnownBusinessRules.GarantSredneuralskPointName);
             Assert.Equal(sred.Id,
                 Assert.Single(db.TerminalBindings(), x => x.TerminalId == KnownBusinessRules.GarantSredneuralskPosTid).LocationId);
+            Assert.Equal(KnownBusinessRules.GarantSredneuralskPointName, Assert.Single(db.Operations(org.Id)).Location);
 
             var second = new SberAcquiringImporter(db).ImportFiles([report]);
             Assert.Equal(0, second.OperationsAdded);
