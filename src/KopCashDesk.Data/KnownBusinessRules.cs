@@ -81,7 +81,7 @@ public static class KnownBusinessRules
         EnsureRegisterLocationRules(database);
         EnsureGarantDvvsRegisters(database);
         EnsureGarantSredneuralsk(database);
-        EnsureGarantSredneuralskVerifiedTerminalHistory(database);
+        RepairGarantSredneuralskLegacyMayBankRows(database);
 
         var applied = 0;
         var backupTaken = false;
@@ -332,69 +332,111 @@ public static class KnownBusinessRules
         tx.Commit();
     }
 
-    private static void EnsureGarantSredneuralskVerifiedTerminalHistory(Database database)
+    private static void RepairGarantSredneuralskLegacyMayBankRows(Database database)
     {
         var organization = database.Organizations()
             .FirstOrDefault(x => DigitsOnly(x.TaxId) == GarantTaxId);
         if (organization is null) return;
 
-        var point = database.Locations()
-            .FirstOrDefault(x =>
-                x.OrganizationId == organization.Id &&
-                x.IsActive &&
-                (Normalize(x.Name) == Normalize(GarantSredneuralskPointName) ||
-                 (Normalize(x.Address).Contains("среднеуральск", StringComparison.Ordinal) &&
-                  Normalize(x.Address).Contains("набереж", StringComparison.Ordinal) &&
-                  Normalize(x.Address).Contains("8а", StringComparison.Ordinal))));
-        if (point is null) return;
+        var locations = database.Locations()
+            .Where(x => x.OrganizationId == organization.Id && x.IsActive)
+            .ToArray();
+        var dvvs = locations.FirstOrDefault(x => Normalize(x.Name) == Normalize(GarantDvvsPointName));
+        var sred = locations.FirstOrDefault(x => Normalize(x.Name) == Normalize(GarantSredneuralskPointName));
+        if (dvvs is null || sred is null) return;
 
-        database.EnsureManualTerminalPostings();
-
-        // Verified from the user's Sber distribution report:
-        // TID 34771891 + 34771897, Среднеуральск, Набережная 8а.
-        // Keep these as daily terminal facts so an already-imported legacy database
-        // is corrected even though historical bank operations did not store TID.
-        var verified = new[]
+        // Verified against the fresh Sber May export (30.09.2026).
+        // These 32 rows are the Среднеуральск terminal stream that an older database
+        // could have placed under ДВВС before TID 34771891/34771897 had a hard point rule.
+        // Time + amount is unique for every row inside ДВВС on 11.05.2026.
+        var rows = new (string Time, long Kopecks)[]
         {
-            (Date: new DateOnly(2026, 3, 26), Amount: 9800m),
-            (Date: new DateOnly(2026, 3, 28), Amount: 37010m),
-            (Date: new DateOnly(2026, 3, 29), Amount: 10500m),
-            (Date: new DateOnly(2026, 5, 11), Amount: 6830m)
+            ("2026-05-11T16:17:37", 37000L),
+            ("2026-05-11T16:27:23", 111000L),
+            ("2026-05-11T16:29:59", 39000L),
+            ("2026-05-11T16:30:25", 10000L),
+            ("2026-05-11T16:31:52", 15000L),
+            ("2026-05-11T16:37:37", 38000L),
+            ("2026-05-11T16:39:37", 7000L),
+            ("2026-05-11T16:39:59", 7000L),
+            ("2026-05-11T16:40:48", 44000L),
+            ("2026-05-11T16:41:18", 7000L),
+            ("2026-05-11T16:42:02", 27000L),
+            ("2026-05-11T16:42:37", 7000L),
+            ("2026-05-11T16:45:32", 10000L),
+            ("2026-05-11T16:47:11", 10000L),
+            ("2026-05-11T16:48:01", 16000L),
+            ("2026-05-11T16:49:09", 5000L),
+            ("2026-05-11T16:49:34", 7000L),
+            ("2026-05-11T16:50:31", 26000L),
+            ("2026-05-11T17:59:06", 7000L),
+            ("2026-05-11T17:59:46", 14000L),
+            ("2026-05-11T18:00:41", 10000L),
+            ("2026-05-11T18:00:59", 7000L),
+            ("2026-05-11T18:01:22", 10000L),
+            ("2026-05-11T18:02:09", 15000L),
+            ("2026-05-11T18:03:17", 23000L),
+            ("2026-05-11T18:03:42", 12000L),
+            ("2026-05-11T18:04:28", 67000L),
+            ("2026-05-11T18:04:48", 12000L),
+            ("2026-05-11T18:05:05", 12000L),
+            ("2026-05-11T18:08:10", 36000L),
+            ("2026-05-11T18:10:15", 3000L),
+            ("2026-05-11T18:11:34", 32000L)
         };
 
         using var db = Open(database);
         using var tx = db.BeginTransaction();
-        var now = DateTimeOffset.UtcNow.ToString("O");
-        var inserted = 0;
+        var moved = 0;
 
-        foreach (var row in verified)
+        foreach (var row in rows)
         {
             using var command = db.CreateCommand();
             command.Transaction = tx;
             command.CommandText = """
-                INSERT OR IGNORE INTO manual_terminal_postings(
-                    organization_id,location_id,business_date,electronic_kopecks,created_at,updated_at)
-                VALUES($org,$loc,$date,$amount,$now,$now);
+                UPDATE operations
+                SET location_id=$sred
+                WHERE source='Sber.Acquiring'
+                  AND source_kind='Bank'
+                  AND organization_id=$org
+                  AND location_id=$dvvs
+                  AND substr(occurred_at,1,19)=$time
+                  AND amount_kopecks=$amount;
                 """;
+            command.Parameters.AddWithValue("$sred", sred.Id.ToString());
             command.Parameters.AddWithValue("$org", organization.Id.ToString());
-            command.Parameters.AddWithValue("$loc", point.Id.ToString());
-            command.Parameters.AddWithValue("$date", row.Date.ToString("yyyy-MM-dd"));
-            command.Parameters.AddWithValue("$amount", Money.ToKopecks(row.Amount));
-            command.Parameters.AddWithValue("$now", now);
-            inserted += command.ExecuteNonQuery();
+            command.Parameters.AddWithValue("$dvvs", dvvs.Id.ToString());
+            command.Parameters.AddWithValue("$time", row.Time);
+            command.Parameters.AddWithValue("$amount", row.Kopecks);
+            moved += command.ExecuteNonQuery();
         }
 
-        if (inserted > 0)
+        // Remove the temporary manual workaround from earlier builds. The real bank rows
+        // above are the source of truth now.
+        using (var clearManual = db.CreateCommand())
+        {
+            clearManual.Transaction = tx;
+            clearManual.CommandText = """
+                DELETE FROM manual_terminal_postings
+                WHERE organization_id=$org AND location_id=$sred
+                  AND business_date IN('2026-03-26','2026-03-28','2026-03-29','2026-05-11');
+                """;
+            clearManual.Parameters.AddWithValue("$org", organization.Id.ToString());
+            clearManual.Parameters.AddWithValue("$sred", sred.Id.ToString());
+            clearManual.ExecuteNonQuery();
+        }
+
+        if (moved > 0)
         {
             using var audit = db.CreateCommand();
             audit.Transaction = tx;
             audit.CommandText = """
                 INSERT INTO audit_log(occurred_at,action,details)
-                VALUES($now,'business_rule.garant_sredneuralsk_terminal_history',$details);
+                VALUES($now,'business_rule.garant_sredneuralsk_may_repair',$details);
                 """;
-            audit.Parameters.AddWithValue("$now", now);
+            audit.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
             audit.Parameters.AddWithValue("$details",
-                $"point={point.Id}; inserted={inserted}; verified daily Sber totals: 2026-03-26=9800, 2026-03-28=37010, 2026-03-29=10500, 2026-05-11=6830");
+                $"moved={moved}; date=2026-05-11; amount=6830.00; from={dvvs.Id}; to={sred.Id}; source=fresh Sber export");
             audit.ExecuteNonQuery();
         }
 
