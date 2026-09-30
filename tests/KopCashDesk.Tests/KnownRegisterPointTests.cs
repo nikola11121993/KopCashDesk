@@ -42,6 +42,89 @@ public sealed class KnownRegisterPointTests
         }
     }
 
+    [Fact]
+    public void GarantSamboRegister_RepairsMistakenBaltymImportAndFutureResolution()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"kopcashdesk-sambo-repair-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        var databasePath = Path.Combine(folder, "cashdesk.db");
+
+        try
+        {
+            var db = new Database(databasePath);
+            db.Initialize();
+
+            var organization = new Organization(Guid.NewGuid(), "ООО ГАРАНТ", KnownBusinessRules.GarantTaxId);
+            var sambo = new KopCashDesk.Core.Location(
+                Guid.NewGuid(), organization.Id, KnownBusinessRules.GarantSamboPointName, KnownBusinessRules.GarantSamboAddress);
+            var baltym = new KopCashDesk.Core.Location(
+                Guid.NewGuid(), organization.Id, "Балтым", "с. Балтым, ул. Первомайская, 50А");
+
+            db.Save(organization);
+            db.Save(sambo);
+            db.Save(baltym);
+
+            RegisterBindingService.Save(db, new RegisterBinding(
+                Guid.NewGuid(),
+                organization.Id,
+                baltym.Id,
+                "7381440901260801",
+                KnownBusinessRules.GarantSamboRnm,
+                BindingSource.Automatic,
+                false,
+                null,
+                null,
+                KnownBusinessRules.GarantSamboRegisterSerial,
+                "Балтым"));
+
+            db.Save(new ShiftClosure(
+                "Taxcom.ShiftReport",
+                "mistaken-baltym-shift",
+                organization.Id,
+                baltym.Id,
+                new DateTimeOffset(2026, 5, 30, 9, 46, 0, TimeSpan.FromHours(5)),
+                1950m,
+                0m,
+                1950m,
+                "7381440901260801",
+                28,
+                null,
+                KnownBusinessRules.GarantSamboRegisterSerial,
+                KnownBusinessRules.GarantSamboRnm,
+                "Балтым"));
+
+            KnownBusinessRules.ApplyPending(db);
+
+            var binding = Assert.Single(
+                db.RegisterBindings(),
+                x => x.KktSerial == KnownBusinessRules.GarantSamboRegisterSerial);
+            Assert.Equal(sambo.Id, binding.LocationId);
+            Assert.Equal(KnownBusinessRules.GarantSamboPointName, binding.DisplayName);
+
+            var shifted = Assert.Single(db.ShiftClosures(
+                organization.Id,
+                sambo.Id,
+                new DateOnly(2026, 5, 30)));
+            Assert.Equal(1950m, shifted.Electronic);
+
+            var resolved = RegisterBindingService.Resolve(
+                db,
+                organization.Id,
+                KnownBusinessRules.GarantSamboRegisterSerial,
+                "7381440901260801",
+                KnownBusinessRules.GarantSamboRnm,
+                "Любая подпись",
+                "Балтым",
+                new DateOnly(2026, 5, 31));
+            Assert.Equal(sambo.Id, resolved.LocationId);
+        }
+        finally
+        {
+            try { Directory.Delete(folder, true); }
+            catch { }
+        }
+    }
+
     private static void CreateWorkbook(string path)
     {
         using var document = SpreadsheetDocument.Create(path, SpreadsheetDocumentType.Workbook);
