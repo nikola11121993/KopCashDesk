@@ -345,6 +345,8 @@ public static class KnownBusinessRules
         var sred = locations.FirstOrDefault(x => Normalize(x.Name) == Normalize(GarantSredneuralskPointName));
         if (dvvs is null || sred is null) return;
 
+        database.EnsureManualTerminalPostings();
+
         // Verified against the fresh Sber May export (30.09.2026).
         // These 32 rows are the Среднеуральск terminal stream that an older database
         // could have placed under ДВВС before TID 34771891/34771897 had a hard point rule.
