@@ -29,6 +29,11 @@ public static class KnownBusinessRules
     public const string GarantSredneuralskPosTid = "34771891";
     public const string GarantSredneuralskQrTid = "34771897";
 
+    public const string GarantSamboPointName = "Дворец самбо";
+    public const string GarantSamboAddress = "Свердловская область, г. Верхняя Пышма, ул. Горняков, 1Б";
+    public const string GarantSamboRegisterSerial = "00307401462012";
+    public const string GarantSamboRnm = "0006988497032805";
+
     public static string? PointNameForRegisterSerial(string serial)
     {
         var digits = DigitsOnly(serial);
@@ -41,6 +46,7 @@ public static class KnownBusinessRules
             GarantDvvs2Serial => GarantDvvsPointName,
             GarantDvvsSpareSerial => GarantDvvsPointName,
             GarantSredneuralskRegisterSerial => GarantSredneuralskPointName,
+            GarantSamboRegisterSerial => GarantSamboPointName,
             _ => null
         };
     }
@@ -81,6 +87,7 @@ public static class KnownBusinessRules
         EnsureRegisterLocationRules(database);
         EnsureGarantDvvsRegisters(database);
         EnsureGarantSredneuralsk(database);
+        EnsureGarantSambo(database);
         RepairGarantSredneuralskLegacyMayBankRows(database);
 
         var applied = 0;
@@ -115,7 +122,8 @@ public static class KnownBusinessRules
                 ('garant-dvvs-1','serial',$dvvs1,$dvvsPoint,''),
                 ('garant-dvvs-2','serial',$dvvs2,$dvvsPoint,''),
                 ('garant-dvvs-spare','serial',$dvvsSpare,$dvvsPoint,''),
-                ('garant-sredneuralsk','serial',$sredSerial,$sredPoint,$sredAddress)
+                ('garant-sredneuralsk','serial',$sredSerial,$sredPoint,$sredAddress),
+                ('garant-sambo','serial',$samboSerial,$samboPoint,$samboAddress)
             ON CONFLICT(rule_key) DO UPDATE SET
                 identity_kind=excluded.identity_kind,
                 identity_value=excluded.identity_value,
@@ -133,6 +141,9 @@ public static class KnownBusinessRules
         command.Parameters.AddWithValue("$sredSerial", GarantSredneuralskRegisterSerial);
         command.Parameters.AddWithValue("$sredPoint", GarantSredneuralskPointName);
         command.Parameters.AddWithValue("$sredAddress", GarantSredneuralskAddress);
+        command.Parameters.AddWithValue("$samboSerial", GarantSamboRegisterSerial);
+        command.Parameters.AddWithValue("$samboPoint", GarantSamboPointName);
+        command.Parameters.AddWithValue("$samboAddress", GarantSamboAddress);
         command.ExecuteNonQuery();
         tx.Commit();
     }
@@ -326,6 +337,184 @@ public static class KnownBusinessRules
             audit.Parameters.AddWithValue("$now", now);
             audit.Parameters.AddWithValue("$details",
                 $"point={point.Id}; KKT={GarantSredneuralskRegisterSerial}; RNM={GarantSredneuralskRnm}; TID={GarantSredneuralskPosTid},{GarantSredneuralskQrTid}");
+            audit.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    private static void EnsureGarantSambo(Database database)
+    {
+        var organization = database.Organizations()
+            .FirstOrDefault(x => DigitsOnly(x.TaxId) == GarantTaxId);
+        if (organization is null) return;
+
+        var locations = database.Locations(true)
+            .Where(x => x.OrganizationId == organization.Id)
+            .ToArray();
+
+        var point = locations.FirstOrDefault(x =>
+                x.IsActive && Normalize(x.Name) == Normalize(GarantSamboPointName))
+            ?? locations.FirstOrDefault(x =>
+            {
+                if (!x.IsActive) return false;
+                var name = Normalize(x.Name);
+                var address = Normalize(x.Address);
+                return name.Contains("самбо", StringComparison.Ordinal) ||
+                       (address.Contains("горняков", StringComparison.Ordinal) && address.Contains("1б", StringComparison.Ordinal)) ||
+                       (address.Contains("успен", StringComparison.Ordinal) &&
+                        (address.Contains("2а", StringComparison.Ordinal) || address.EndsWith("2", StringComparison.Ordinal)));
+            });
+
+        if (point is null)
+        {
+            point = new Location(
+                Guid.NewGuid(),
+                organization.Id,
+                GarantSamboPointName,
+                GarantSamboAddress);
+            database.Save(point);
+        }
+        else if (Normalize(point.Name) != Normalize(GarantSamboPointName))
+        {
+            point = point with { Name = GarantSamboPointName };
+            database.Save(point);
+        }
+
+        using var db = Open(database);
+        using var tx = db.BeginTransaction();
+        var now = DateTimeOffset.UtcNow.ToString("O");
+
+        using (var binding = db.CreateCommand())
+        {
+            binding.Transaction = tx;
+            binding.CommandText = """
+                UPDATE register_bindings
+                SET location_id=$loc,
+                    kkt_serial=$serial,
+                    register_number=$rnm,
+                    display_name=$name,
+                    binding_source='Rule',
+                    is_locked=1,
+                    updated_at=$now
+                WHERE organization_id=$org AND is_active=1
+                  AND (kkt_serial=$serial OR register_number=$rnm)
+                  AND binding_source<>'Manual';
+                """;
+            binding.Parameters.AddWithValue("$loc", point.Id.ToString());
+            binding.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
+            binding.Parameters.AddWithValue("$rnm", GarantSamboRnm);
+            binding.Parameters.AddWithValue("$name", GarantSamboPointName);
+            binding.Parameters.AddWithValue("$now", now);
+            binding.Parameters.AddWithValue("$org", organization.Id.ToString());
+            var changed = binding.ExecuteNonQuery();
+
+            if (changed == 0)
+            {
+                using var insert = db.CreateCommand();
+                insert.Transaction = tx;
+                insert.CommandText = """
+                    INSERT INTO register_bindings(
+                        id,organization_id,location_id,fn,register_number,binding_source,is_locked,
+                        valid_from,valid_to,kkt_serial,display_name,created_at,updated_at,is_active)
+                    SELECT $id,$org,$loc,'',$rnm,'Rule',1,NULL,NULL,$serial,$name,$now,$now,1
+                    WHERE NOT EXISTS(
+                        SELECT 1 FROM register_bindings
+                        WHERE organization_id=$org AND is_active=1
+                          AND (kkt_serial=$serial OR register_number=$rnm)
+                    );
+                    """;
+                insert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+                insert.Parameters.AddWithValue("$org", organization.Id.ToString());
+                insert.Parameters.AddWithValue("$loc", point.Id.ToString());
+                insert.Parameters.AddWithValue("$rnm", GarantSamboRnm);
+                insert.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
+                insert.Parameters.AddWithValue("$name", GarantSamboPointName);
+                insert.Parameters.AddWithValue("$now", now);
+                insert.ExecuteNonQuery();
+            }
+        }
+
+        var moved = 0;
+        using (var shifts = db.CreateCommand())
+        {
+            shifts.Transaction = tx;
+            shifts.CommandText = """
+                UPDATE shift_closures
+                SET location_id=$loc
+                WHERE organization_id=$org
+                  AND kkt_serial=$serial
+                  AND (location_id IS NULL OR location_id<>$loc);
+                """;
+            shifts.Parameters.AddWithValue("$loc", point.Id.ToString());
+            shifts.Parameters.AddWithValue("$org", organization.Id.ToString());
+            shifts.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
+            moved += shifts.ExecuteNonQuery();
+        }
+
+        using (var operations = db.CreateCommand())
+        {
+            operations.Transaction = tx;
+            operations.CommandText = """
+                UPDATE operations
+                SET location_id=$loc
+                WHERE organization_id=$org
+                  AND source_kind<>'Bank'
+                  AND kkt_serial=$serial
+                  AND (location_id IS NULL OR location_id<>$loc);
+                """;
+            operations.Parameters.AddWithValue("$loc", point.Id.ToString());
+            operations.Parameters.AddWithValue("$org", organization.Id.ToString());
+            operations.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
+            moved += operations.ExecuteNonQuery();
+        }
+
+        // Legacy shift-derived rows can have an empty kkt_serial; follow the repaired parent shift.
+        using (var legacy = db.CreateCommand())
+        {
+            legacy.Transaction = tx;
+            legacy.CommandText = """
+                UPDATE operations
+                SET location_id=$loc
+                WHERE organization_id=$org
+                  AND source_kind<>'Bank'
+                  AND EXISTS(
+                      SELECT 1 FROM shift_closures s
+                      WHERE s.organization_id=operations.organization_id
+                        AND s.source=operations.source
+                        AND s.kkt_serial=$serial
+                        AND operations.external_id IN(s.external_id||':cash',s.external_id||':electronic')
+                  )
+                  AND (location_id IS NULL OR location_id<>$loc);
+                """;
+            legacy.Parameters.AddWithValue("$loc", point.Id.ToString());
+            legacy.Parameters.AddWithValue("$org", organization.Id.ToString());
+            legacy.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
+            moved += legacy.ExecuteNonQuery();
+        }
+
+        if (moved > 0)
+        {
+            using var reset = db.CreateCommand();
+            reset.Transaction = tx;
+            reset.CommandText = "DELETE FROM reconciliation_allocations;";
+            reset.ExecuteNonQuery();
+        }
+
+        using (var audit = db.CreateCommand())
+        {
+            audit.Transaction = tx;
+            audit.CommandText = """
+                INSERT INTO audit_log(occurred_at,action,details)
+                SELECT $now,'business_rule.garant_sambo',$details
+                WHERE NOT EXISTS(
+                    SELECT 1 FROM audit_log
+                    WHERE action='business_rule.garant_sambo' AND details=$details
+                );
+                """;
+            audit.Parameters.AddWithValue("$now", now);
+            audit.Parameters.AddWithValue("$details",
+                $"point={point.Id}; KKT={GarantSamboRegisterSerial}; RNM={GarantSamboRnm}; moved={moved}; address={GarantSamboAddress}");
             audit.ExecuteNonQuery();
         }
 
