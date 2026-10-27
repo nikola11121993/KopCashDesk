@@ -26,7 +26,7 @@ public sealed class ManualStandaloneDayTests
         var day = Assert.Single(db.CanonicalPointDaySummaries(organization.Id, 2026, 7, location.Id));
         Assert.Equal(date, day.Date);
         Assert.Equal(75500.25m, day.BankElectronic);
-        Assert.Null(day.FiscalElectronic);
+        Assert.Equal(76123.45m, day.FiscalElectronic);
         Assert.Null(day.ShiftTotal);
         Assert.Equal(0, day.ShiftCount);
         Assert.Equal(string.Empty, day.FiscalSources);

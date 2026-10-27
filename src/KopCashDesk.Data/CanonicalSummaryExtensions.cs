@@ -115,7 +115,7 @@ public static class CanonicalSummaryExtensions
                 CASE WHEN manual_terminal.electronic_kopecks IS NOT NULL THEN manual_terminal.electronic_kopecks
                      WHEN COALESCE(op.bank_count,0)>0 THEN op.bank_sum ELSE NULL END,
                 CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL
-                     WHEN COALESCE(op.fiscal_count,0)>0 AND manual_cash.electronic_kopecks IS NOT NULL THEN manual_cash.electronic_kopecks
+                     WHEN manual_cash.electronic_kopecks IS NOT NULL THEN manual_cash.electronic_kopecks
                      WHEN COALESCE(op.fiscal_count,0)>0 THEN op.fiscal_sum ELSE NULL END,
                 CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL ELSE shifts.total_sum END,
                 CASE WHEN COALESCE(conflicts.conflict_count,0)>0 THEN NULL ELSE shifts.cash_sum END,

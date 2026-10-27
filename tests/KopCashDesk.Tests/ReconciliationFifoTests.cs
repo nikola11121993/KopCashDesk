@@ -115,7 +115,7 @@ public sealed class ReconciliationFifoTests
         fixture.Database.SetManualCash(fixture.Organization.Id, fixture.Location.Id, new DateOnly(2026, 9, 15), 45000m);
 
         var summary = fixture.Database.PointDaySummaries(fixture.Organization.Id, 2026, 9, fixture.Location.Id);
-        Assert.Contains(summary, x => x.Date == new DateOnly(2026, 9, 15));
+        Assert.Equal(45000m, Assert.Single(summary, x => x.Date == new DateOnly(2026, 9, 15)).FiscalElectronic);
 
         var rows = fixture.Days().ToDictionary(x => x.Date);
         Assert.Equal(45000m, rows[new DateOnly(2026, 9, 15)].CashElectronic);

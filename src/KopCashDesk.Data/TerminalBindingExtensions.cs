@@ -13,6 +13,11 @@ public static class TerminalBindingExtensions
         if (string.IsNullOrWhiteSpace(terminal.TerminalId))
             throw new InvalidOperationException("Укажите TID терминала.");
 
+        if (terminal.ValidFrom > terminal.ValidTo)
+            throw new InvalidOperationException("Начало периода позже окончания.");
+        if (!database.Locations().Any(x => x.Id == terminal.LocationId && x.OrganizationId == terminal.OrganizationId && x.IsActive))
+            throw new InvalidOperationException("Выберите действующую точку этой организации.");
+
         using var db = Open(database);
         using var transaction = db.BeginTransaction();
         var old = ReadById(db, transaction, terminal.Id);
@@ -27,11 +32,15 @@ public static class TerminalBindingExtensions
                   AND provider=$provider
                   AND tid=$tid
                   AND id<>$id
+                  AND ($from IS NULL OR valid_to IS NULL OR valid_to >= $from)
+                  AND ($to IS NULL OR valid_from IS NULL OR valid_from <= $to)
                 """;
             duplicate.Parameters.AddWithValue("$org", terminal.OrganizationId.ToString());
             duplicate.Parameters.AddWithValue("$provider", terminal.Provider.Trim());
             duplicate.Parameters.AddWithValue("$tid", terminal.TerminalId.Trim());
             duplicate.Parameters.AddWithValue("$id", terminal.Id.ToString());
+            duplicate.Parameters.AddWithValue("$from", (object?)terminal.ValidFrom?.ToString("yyyy-MM-dd") ?? DBNull.Value);
+            duplicate.Parameters.AddWithValue("$to", (object?)terminal.ValidTo?.ToString("yyyy-MM-dd") ?? DBNull.Value);
             if (Convert.ToInt32(duplicate.ExecuteScalar()) > 0)
                 throw new InvalidOperationException("Такой TID уже есть у этой организации и провайдера.");
         }

@@ -301,92 +301,21 @@ public partial class MainWindow
                 .OrderByDescending(x => x.Year).ThenByDescending(x => x.Month).ThenBy(x => x.Point).ToArray();
             monthlyGrid.ItemsSource = monthRows;
 
-            // Верхняя строка не зависит от выбранного месяца: это рабочий накопительный итог за 2026 год.
-            // Для ГРЭС-6 действует подтверждённая пользователем контрольная точка:
-            // с 09.09.2026 кассу не пробивают, стартовое перепробитие = 634 022 ₽,
-            // новые терминальные оплаты постепенно гасят этот остаток.
-            var selectedLocation = locationId is Guid selectedLocationId
-                ? _locations.FirstOrDefault(x => x.Id == selectedLocationId)
-                : null;
+            var period = PeriodSummary.Calculate(rows);
+            totals.Text = $"Итог выбранного периода ({year}): " +
+                $"Касса безнал: {MoneyText(period.Cash)} • Терминал безнал: {MoneyText(period.Bank)} • {period.Status}";
 
-            if (selectedLocation is not null && IsGres6CorrectionPoint(selectedLocation.Name))
+            // Keep the historical control separate from the selected period's actual totals.
+            var selectedLocation = locationId is Guid id ? _locations.FirstOrDefault(x => x.Id == id) : null;
+            if (year == 2026 && month is null && selectedLocation is not null && IsGres6CorrectionPoint(selectedLocation.Name))
             {
-                var trackerRowsSource = _db.CanonicalPointDaySummaries(
-                    SelectedOrganizationId,
-                    2026,
-                    null,
-                    selectedLocation.Id);
-                var trackerManualCash = _db.ManualCashPostings(
-                        SelectedOrganizationId,
-                        2026,
-                        null,
-                        selectedLocation.Id)
-                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
-                var trackerManualTerminal = _db.ManualTerminalPostings(
-                        SelectedOrganizationId,
-                        2026,
-                        null,
-                        selectedLocation.Id)
-                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
-
-                var trackerRows = trackerRowsSource
-                    .Select(x => ToDayRowV051(x, trackerManualCash, trackerManualTerminal))
-                    .Where(x => x.DateValue >= Gres6OverageStartDate)
-                    .ToArray();
-
-                var terminalSinceStart = Money.Normalize(trackerRows.Sum(x => x.Sber ?? 0m));
-                var cashSinceStart = Money.Normalize(trackerRows.Sum(x => x.CashElectronic ?? 0m));
-                var remainingOverage = Money.Normalize(Gres6InitialOverage + cashSinceStart - terminalSinceStart);
-
-                var state = remainingOverage > 0m
-                    ? $"ПЕРЕБИТО: {remainingOverage:N2} ₽"
-                    : remainingOverage < 0m
-                        ? $"НАДО ПРОБИТЬ: {Math.Abs(remainingOverage):N2} ₽"
-                        : "СОШЛОСЬ: 0,00 ₽";
-
-                totals.Text =
-                    $"Касса безнал: {cashSinceStart:N2} ₽     •     " +
-                    $"Терминал безнал: {terminalSinceStart:N2} ₽     •     " +
-                    state;
+                var tracker = PeriodSummary.Calculate(rows.Where(x => x.Date >= Gres6OverageStartDate));
+                totals.Text += "\nИсторический контроль с 09.09.2026; начальное перепробитие 634 022 ₽: " +
+                    (tracker.IsComplete
+                        ? $"остаток {Money.Normalize(Gres6InitialOverage + tracker.Cash!.Value - tracker.Bank!.Value):N2} ₽"
+                        : "Неполные данные — требуется проверка");
             }
-            else
-            {
-                var totalRowsSource = _db.CanonicalPointDaySummaries(
-                    SelectedOrganizationId,
-                    2026,
-                    null,
-                    locationId);
-                var totalManualCash = _db.ManualCashPostings(
-                        SelectedOrganizationId,
-                        2026,
-                        null,
-                        locationId)
-                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
-                var totalManualTerminal = _db.ManualTerminalPostings(
-                        SelectedOrganizationId,
-                        2026,
-                        null,
-                        locationId)
-                    .ToDictionary(x => (x.OrganizationId, x.LocationId, x.Date), x => x.Electronic);
 
-                var totalRows = totalRowsSource
-                    .Select(x => ToDayRowV051(x, totalManualCash, totalManualTerminal))
-                    .ToArray();
-
-                var terminalTotal = Money.Normalize(totalRows.Sum(x => x.Sber ?? 0m));
-                var cashTotal = Money.Normalize(totalRows.Sum(x => x.CashElectronic ?? 0m));
-                var balance = Money.Normalize(cashTotal - terminalTotal);
-                var state = balance > 0m
-                    ? $"ПЕРЕБИТО: {balance:N2} ₽"
-                    : balance < 0m
-                        ? $"НАДО ПРОБИТЬ: {Math.Abs(balance):N2} ₽"
-                        : "СОШЛОСЬ: 0,00 ₽";
-
-                totals.Text =
-                    $"Касса безнал: {cashTotal:N2} ₽     •     " +
-                    $"Терминал безнал: {terminalTotal:N2} ₽     •     " +
-                    state;
-            }
         }
 
         yearBox.SelectionChanged += (_, _) => RefreshData();
@@ -415,7 +344,7 @@ public partial class MainWindow
 
         return new DaySummaryRow(
             row.Date, row.OrganizationId, row.LocationId, row.Organization, row.Location,
-            row.BankElectronic, cash, row.FiscalElectronic is not null, copied,
+            row.BankElectronic, cash, row.FiscalElectronic is not null && (!hasManualCash || row.FiscalSources.Length > 0), copied,
             row.BankElectronic is not null && !row.HasSourceConflict,
             row.ShiftTotal, row.ShiftCount, row.LastShiftClosedAt,
             difference, status);
