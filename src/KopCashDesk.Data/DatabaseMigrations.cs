@@ -4,7 +4,7 @@ namespace KopCashDesk.Data;
 
 internal static class DatabaseMigrations
 {
-    public const long CurrentVersion = 4;
+    public const long CurrentVersion = 5;
 
     public static void Apply(Database database)
     {
@@ -30,10 +30,46 @@ internal static class DatabaseMigrations
         if (version < 4)
             RegisterSchemaMigration.Apply(db);
 
+        if (version < 5)
+            MigrateToV5(db);
+
         // Data-only business rules are intentionally idempotent and remain outside the schema version.
         // This lets an already-v4 database receive corrected hard KKT bindings without rebuilding tables.
         KnownBusinessRules.ApplyPending(database);
         database.RepairSberOverlappingImports();
+    }
+
+    private static void MigrateToV5(SqliteConnection db)
+    {
+        using var tx = db.BeginTransaction();
+        using var c = db.CreateCommand();
+        c.Transaction = tx;
+        c.CommandText = """
+            CREATE TABLE terminal_bindings_v5(
+                id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id),
+                location_id TEXT NOT NULL REFERENCES locations(id), provider TEXT NOT NULL, tid TEXT NOT NULL,
+                mid TEXT NOT NULL DEFAULT '', payment_method TEXT NOT NULL DEFAULT 'POS',
+                binding_source TEXT NOT NULL DEFAULT 'Automatic', is_locked INTEGER NOT NULL DEFAULT 0,
+                valid_from TEXT, valid_to TEXT);
+            INSERT INTO terminal_bindings_v5 SELECT id,organization_id,location_id,provider,tid,mid,payment_method,
+                binding_source,is_locked,valid_from,valid_to FROM terminal_bindings;
+            DROP TABLE terminal_bindings;
+            ALTER TABLE terminal_bindings_v5 RENAME TO terminal_bindings;
+            CREATE INDEX ix_terminal_identity_period ON terminal_bindings(organization_id,provider,tid,valid_from,valid_to);
+            UPDATE schema_version SET version=5;
+            INSERT INTO audit_log(occurred_at,action,details)
+                VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'),'schema.migrate','4 -> 5: dated terminal binding history');
+            """;
+        c.ExecuteNonQuery();
+        c.CommandText = "CREATE TABLE cross_source_revision(id INTEGER PRIMARY KEY CHECK(id=1), instance TEXT NOT NULL, revision INTEGER NOT NULL); INSERT INTO cross_source_revision VALUES(1,hex(randomblob(16)),0);";
+        c.ExecuteNonQuery();
+        foreach (var table in new[] { "shift_closures", "operations", "shift_source_links", "fiscal_source_conflicts", "locations", "organizations" })
+            foreach (var action in new[] { "INSERT", "UPDATE", "DELETE" })
+            {
+                c.CommandText = $"CREATE TRIGGER revision_{table}_{action} AFTER {action} ON {table} BEGIN UPDATE cross_source_revision SET revision=revision+1 WHERE id=1; END;";
+                c.ExecuteNonQuery();
+            }
+        tx.Commit();
     }
 
     private static void MigrateToV2(SqliteConnection db)

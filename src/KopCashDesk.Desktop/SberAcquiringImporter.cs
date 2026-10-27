@@ -47,15 +47,15 @@ public sealed class SberAcquiringImporter
     private readonly Database _database;
     private List<Organization> _organizations = [];
     private List<Location> _locations = [];
-    private Dictionary<string, TerminalBinding> _terminals = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(Guid Org, string Tid, string Mid, DateOnly Day), Location?> _resolvedLocations = [];
 
     public SberAcquiringImporter(Database database) => _database = database;
 
     public SberImportSummary ImportFiles(IEnumerable<string> paths)
     {
+        _resolvedLocations.Clear();
         _organizations = _database.Organizations().ToList();
         _locations = _database.Locations().ToList();
-        _terminals = _database.TerminalBindings().ToDictionary(TerminalKey, StringComparer.OrdinalIgnoreCase);
 
         var summary = new SberImportSummary();
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -212,9 +212,14 @@ public sealed class SberAcquiringImporter
 
             var organization = ResolveOrganization(legalName, taxId, summary);
             var pointName = CleanPointName(sourcePointName);
-            var location = ResolveLocation(organization, pointName, sourceAddress, terminalId, summary);
-            var paymentMethod = DetectPaymentMethod(sourcePointName);
-            SaveTerminal(organization, location, terminalId, merchantId, paymentMethod, summary);
+            var day = DateOnly.FromDateTime(occurredAt.DateTime);
+            var key = (organization.Id, terminalId, merchantId, day);
+            if (!_resolvedLocations.TryGetValue(key, out var location))
+            {
+                location = ResolveLocation(organization, pointName, sourceAddress, terminalId, merchantId, day, summary);
+                if (location is not null) SaveTerminal(organization, location, terminalId, merchantId, DetectPaymentMethod(sourcePointName), summary);
+                _resolvedLocations[key] = location;
+            }
 
             var kind = DetectOperationKind(status, reason, amount);
             if (kind == OperationKind.Return && amount > 0m) amount = -amount;
@@ -227,7 +232,7 @@ public sealed class SberAcquiringImporter
                 Source,
                 externalId,
                 organization.Id,
-                location.Id,
+                location?.Id,
                 occurredAt,
                 SourceKind.Bank,
                 kind,
@@ -236,7 +241,11 @@ public sealed class SberAcquiringImporter
                 documentId));
 
             if (inserted) summary.OperationsAdded++;
-            else summary.DuplicatesIgnored++;
+            else
+            {
+                _database.RepairImportedBankBinding(Source, externalId, location?.Id);
+                summary.DuplicatesIgnored++;
+            }
         }
     }
 
@@ -265,13 +274,19 @@ public sealed class SberAcquiringImporter
         return created;
     }
 
-    private Location ResolveLocation(Organization organization, string pointName, string address, string terminalId, SberImportSummary summary)
+    private Location? ResolveLocation(Organization organization, string pointName, string address, string terminalId, string merchantId, DateOnly day, SberImportSummary summary)
     {
-        var terminalKey = TerminalKey(organization.Id, terminalId);
-        if (_terminals.TryGetValue(terminalKey, out var existingTerminal))
+        var binding = TerminalLocationResolver.Resolve(_database, organization.Id, "Sber", terminalId, merchantId, day, out var review);
+        if (binding is not null)
         {
-            var bound = _locations.FirstOrDefault(x => x.Id == existingTerminal.LocationId);
+            var bound = _locations.FirstOrDefault(x => x.Id == binding.LocationId);
             if (bound is not null) return bound;
+            review = true;
+        }
+        if (review)
+        {
+            summary.Messages.Add($"TID {terminalId}, {day}: требует проверки привязки; операция сохранена без точки.");
+            return null;
         }
 
         var organizationLocations = _locations.Where(x => x.OrganizationId == organization.Id).ToArray();
@@ -313,21 +328,11 @@ public sealed class SberAcquiringImporter
 
     private void SaveTerminal(Organization organization, Location location, string terminalId, string merchantId, string paymentMethod, SberImportSummary summary)
     {
-        var key = TerminalKey(organization.Id, terminalId);
-        if (_terminals.TryGetValue(key, out var current))
-        {
-            if (current.LocationId != location.Id || current.MerchantId != merchantId || current.PaymentMethod != paymentMethod)
-            {
-                var updated = current with { LocationId = location.Id, MerchantId = merchantId, PaymentMethod = paymentMethod };
-                _database.Save(updated);
-                _terminals[key] = updated;
-            }
-            return;
-        }
-
+        // Existing bindings (including dated history and known rules) are resolved centrally.
+        if (_database.TerminalBindings().Any(x => x.OrganizationId == organization.Id &&
+            x.Provider == "Sber" && x.TerminalId == terminalId)) return;
         var created = new TerminalBinding(Guid.NewGuid(), organization.Id, location.Id, "Sber", terminalId, merchantId, paymentMethod);
         _database.Save(created);
-        _terminals[key] = created;
         summary.TerminalsCreated++;
     }
 

@@ -37,6 +37,15 @@ public sealed record FiscalSourceConflictView(
 
 public static class CrossSourceShiftExtensions
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Token, int Matched, int Conflicts)> RebuildCache = new();
+
+    private static string Revision(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var c = db.CreateCommand(); c.Transaction = tx;
+        c.CommandText = "SELECT instance || ':' || revision FROM cross_source_revision WHERE id=1";
+        return (string)c.ExecuteScalar()!;
+    }
+
     public const int DefaultToleranceSeconds = 5 * 60;
     private const string Taxcom = "Taxcom.ShiftReport";
     private const string Frontol = "Frontol.Report";
@@ -71,6 +80,13 @@ public static class CrossSourceShiftExtensions
 
         using var db = Open(database);
         using var tx = db.BeginTransaction();
+        var cacheKey = $"{System.IO.Path.GetFullPath(database.Path)}|{toleranceSeconds}";
+        var token = Revision(db, tx);
+        if (RebuildCache.TryGetValue(cacheKey, out var cached) && cached.Token == token)
+        {
+            tx.Commit();
+            return new(cached.Matched, 0, cached.Conflicts, 0);
+        }
         var observations = ReadObservations(db, tx);
         var existingMatchCreated = ReadExistingCreatedAt(db, tx, "shift_source_links", "id");
         var existingConflictCreated = ReadExistingCreatedAt(db, tx, "fiscal_source_conflicts", "id");
@@ -197,7 +213,9 @@ public static class CrossSourceShiftExtensions
                 $"frontol_electronic_kopecks={conflict.Frontol.ElectronicKopecks}; time_difference_seconds={conflict.DeltaSeconds}");
         }
 
+        var finalToken = Revision(db, tx);
         tx.Commit();
+        RebuildCache[cacheKey] = (finalToken, desiredMatches.Count, desiredConflicts.Count);
         return new(desiredMatches.Count, newMatches, desiredConflicts.Count, newConflicts);
     }
 

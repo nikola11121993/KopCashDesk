@@ -168,9 +168,13 @@ public sealed class Database
             read.CommandText = """
                 SELECT id,organization_id,location_id,provider,tid,mid,payment_method,binding_source,is_locked,valid_from,valid_to
                 FROM terminal_bindings
-                WHERE organization_id=$org AND provider=$provider AND tid=$tid
-                LIMIT 1
+                WHERE id=$id OR (organization_id=$org AND provider=$provider AND tid=$tid
+                    AND valid_from IS $from AND valid_to IS $to)
+                ORDER BY CASE WHEN id=$id THEN 0 ELSE 1 END LIMIT 1
                 """;
+            read.Parameters.AddWithValue("$id", x.Id.ToString());
+            read.Parameters.AddWithValue("$from", (object?)x.ValidFrom?.ToString("yyyy-MM-dd") ?? DBNull.Value);
+            read.Parameters.AddWithValue("$to", (object?)x.ValidTo?.ToString("yyyy-MM-dd") ?? DBNull.Value);
             read.Parameters.AddWithValue("$org", x.OrganizationId.ToString());
             read.Parameters.AddWithValue("$provider", x.Provider.Trim());
             read.Parameters.AddWithValue("$tid", x.TerminalId.Trim());
@@ -191,7 +195,7 @@ public sealed class Database
             command.CommandText = """
                 INSERT INTO terminal_bindings(id,organization_id,location_id,provider,tid,mid,payment_method,binding_source,is_locked,valid_from,valid_to)
                 VALUES($id,$org,$loc,$provider,$tid,$mid,$method,$source,$locked,$from,$to)
-                ON CONFLICT(organization_id,provider,tid) DO UPDATE SET
+                ON CONFLICT(id) DO UPDATE SET
                     location_id=excluded.location_id,
                     mid=excluded.mid,
                     payment_method=excluded.payment_method,

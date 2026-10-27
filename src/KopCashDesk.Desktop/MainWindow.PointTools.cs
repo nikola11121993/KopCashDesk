@@ -142,6 +142,8 @@ public partial class MainWindow
         grid.Columns.Add(new DataGridTextColumn { Header = "TID", Binding = new Binding("Tid"), Width = 145 });
         grid.Columns.Add(new DataGridTextColumn { Header = "MID", Binding = new Binding("Mid"), Width = 155 });
         grid.Columns.Add(new DataGridTextColumn { Header = "Способ", Binding = new Binding("Method"), Width = 100 });
+        grid.Columns.Add(new DataGridTextColumn { Header = "С даты", Binding = new Binding("Binding.ValidFrom"), Width = 110 });
+        grid.Columns.Add(new DataGridTextColumn { Header = "По дату", Binding = new Binding("Binding.ValidTo"), Width = 110 });
 
         void RefreshRows()
         {
@@ -215,6 +217,8 @@ public partial class MainWindow
         var provider = new TextBox { Text = original?.Provider ?? "Sber" };
         var tid = new TextBox { Text = original?.TerminalId ?? "" };
         var mid = new TextBox { Text = original?.MerchantId ?? "" };
+        var validFrom = new DatePicker { SelectedDate = original?.ValidFrom?.ToDateTime(TimeOnly.MinValue) };
+        var validTo = new DatePicker { SelectedDate = original?.ValidTo?.ToDateTime(TimeOnly.MinValue) };
         var method = new ComboBox
         {
             ItemsSource = new[] { "POS", "QR", "SBP", "FACE", "SBERPAY" },
@@ -227,7 +231,10 @@ public partial class MainWindow
             Text("Провайдер"), provider,
             Text("TID"), tid,
             Text("MID"), mid,
-            Text("Способ оплаты"), method);
+            Text("Способ оплаты"), method,
+            Text("Действует с (пусто — без ограничения)"), validFrom,
+            Text("Действует по (включительно)"), validTo,
+            Text("При переезде закройте старый период и добавьте новую привязку с датой начала."));
 
         if (!Dialog(original is null ? "Новый терминал" : "Изменить терминал", content,
                 () => point.SelectedItem is Location && !string.IsNullOrWhiteSpace(provider.Text) && !string.IsNullOrWhiteSpace(tid.Text))) return;
@@ -239,7 +246,9 @@ public partial class MainWindow
             provider.Text.Trim(),
             tid.Text.Trim(),
             mid.Text.Trim(),
-            string.IsNullOrWhiteSpace(method.Text) ? "POS" : method.Text.Trim().ToUpperInvariant());
+            string.IsNullOrWhiteSpace(method.Text) ? "POS" : method.Text.Trim().ToUpperInvariant(),
+            ValidFrom: validFrom.SelectedDate is DateTime from ? DateOnly.FromDateTime(from) : null,
+            ValidTo: validTo.SelectedDate is DateTime to ? DateOnly.FromDateTime(to) : null);
 
         try
         {
