@@ -12,7 +12,7 @@ public static class FiscalImportExtensions
     public static void SaveRegisterBinding(this Database database, RegisterBinding binding)
         => RegisterBindingService.Save(database, binding);
 
-    public static bool UpsertBankOperation(this Database database, CashOperation operation)
+    public static bool UpsertBankOperation(this Database database, CashOperation operation, string? confirmedTerminalId = null)
     {
         using var db = Open(database);
         using var transaction = db.BeginTransaction();
@@ -25,6 +25,25 @@ public static class FiscalImportExtensions
             exists.Parameters.AddWithValue("$source", operation.Source);
             exists.Parameters.AddWithValue("$external", operation.ExternalId);
             existed = Convert.ToInt64(exists.ExecuteScalar()) != 0;
+        }
+
+        if (existed && confirmedTerminalId is not null)
+        {
+            using var audit = db.CreateCommand();
+            audit.Transaction = transaction;
+            audit.CommandText = """
+                INSERT INTO audit_log(occurred_at,action,details)
+                SELECT $now,'sber.reassign_operation',
+                       'TID='||$tid||'; operation='||id||'; from='||COALESCE(location_id,'')||'; to='||$loc
+                FROM operations
+                WHERE source=$source AND external_id=$external AND location_id IS NOT $loc;
+                """;
+            audit.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            audit.Parameters.AddWithValue("$tid", confirmedTerminalId);
+            audit.Parameters.AddWithValue("$loc", operation.LocationId!.Value.ToString());
+            audit.Parameters.AddWithValue("$source", operation.Source);
+            audit.Parameters.AddWithValue("$external", operation.ExternalId);
+            audit.ExecuteNonQuery();
         }
 
         using (var command = db.CreateCommand())

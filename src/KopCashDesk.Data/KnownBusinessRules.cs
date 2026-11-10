@@ -34,6 +34,10 @@ public static class KnownBusinessRules
     public const string GarantSamboRegisterSerial = "00307401462012";
     public const string GarantSamboRnm = "0006988497032805";
 
+    public const string GarantSamboPosTid = "37799127";
+    public const string GarantSamboQrTid = "37799128";
+    public const string GarantSamboSbpTid = "37825027";
+
     public static string? PointNameForRegisterSerial(string serial)
     {
         var digits = DigitsOnly(serial);
@@ -55,9 +59,12 @@ public static class KnownBusinessRules
     {
         if (DigitsOnly(taxId) != GarantTaxId) return null;
         var tid = DigitsOnly(terminalId);
-        return tid is GarantSredneuralskPosTid or GarantSredneuralskQrTid
-            ? GarantSredneuralskPointName
-            : null;
+        return tid switch
+        {
+            GarantSredneuralskPosTid or GarantSredneuralskQrTid => GarantSredneuralskPointName,
+            GarantSamboPosTid or GarantSamboQrTid or GarantSamboSbpTid => GarantSamboPointName,
+            _ => null
+        };
     }
 
     public static Location? FindKnownPoint(IEnumerable<Location> locations, string knownPoint)
@@ -87,7 +94,7 @@ public static class KnownBusinessRules
         EnsureRegisterLocationRules(database);
         EnsureGarantDvvsRegisters(database);
         EnsureGarantSredneuralsk(database);
-        EnsureGarantSambo(database);
+        var samboChanged = EnsureGarantSambo(database);
         RepairGarantSredneuralskLegacyMayBankRows(database);
 
         var applied = 0;
@@ -102,7 +109,7 @@ public static class KnownBusinessRules
             applied += TryReftinskayaDuplicate(database, organization.Id);
         }
 
-        if (applied > 0)
+        if (applied > 0 || samboChanged)
             database.RebuildCrossSourceShiftMatches();
 
         return applied;
@@ -343,11 +350,50 @@ public static class KnownBusinessRules
         tx.Commit();
     }
 
-    private static void EnsureGarantSambo(Database database)
+    public static void SaveGarantSamboTerminal(Database database, TerminalBinding terminal)
+    {
+        using var db = Open(database);
+        using var tx = db.BeginTransaction();
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            INSERT INTO audit_log(occurred_at,action,details)
+            SELECT $now,'business_rule.garant_sambo_terminal',
+                   'TID='||tid||'; from='||location_id||'; to='||$loc
+            FROM terminal_bindings
+            WHERE organization_id=$org AND provider='Sber' AND tid=$tid AND location_id<>$loc;
+
+            INSERT INTO terminal_bindings(id,organization_id,location_id,provider,tid,mid,payment_method,
+                                          binding_source,is_locked,valid_from,valid_to)
+            VALUES($id,$org,$loc,'Sber',$tid,$mid,$method,'Rule',1,NULL,NULL)
+            ON CONFLICT(organization_id,provider,tid) DO UPDATE SET
+                location_id=excluded.location_id,
+                mid=CASE WHEN excluded.mid='' THEN terminal_bindings.mid ELSE excluded.mid END,
+                payment_method=excluded.payment_method,
+                binding_source='Rule',
+                is_locked=1;
+            """;
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$id", terminal.Id.ToString());
+        command.Parameters.AddWithValue("$org", terminal.OrganizationId.ToString());
+        command.Parameters.AddWithValue("$loc", terminal.LocationId.ToString());
+        command.Parameters.AddWithValue("$tid", terminal.TerminalId);
+        command.Parameters.AddWithValue("$mid", terminal.MerchantId);
+        command.Parameters.AddWithValue("$method", terminal.TerminalId switch
+        {
+            GarantSamboQrTid => "QR",
+            GarantSamboSbpTid => "SBP",
+            _ => "POS"
+        });
+        command.ExecuteNonQuery();
+        tx.Commit();
+    }
+
+    private static bool EnsureGarantSambo(Database database)
     {
         var organization = database.Organizations()
             .FirstOrDefault(x => DigitsOnly(x.TaxId) == GarantTaxId);
-        if (organization is null) return;
+        if (organization is null) return false;
 
         var locations = database.Locations(true)
             .Where(x => x.OrganizationId == organization.Id)
@@ -381,6 +427,14 @@ public static class KnownBusinessRules
             database.Save(point);
         }
 
+        foreach (var terminal in database.TerminalBindings().Where(x =>
+            x.OrganizationId == organization.Id && x.Provider == "Sber" &&
+            PointNameForTerminal(organization.TaxId, x.TerminalId) == GarantSamboPointName &&
+            (x.LocationId != point.Id || x.BindingSource != BindingSource.Rule || !x.IsLocked)))
+        {
+            SaveGarantSamboTerminal(database, terminal with { LocationId = point.Id });
+        }
+
         using var db = Open(database);
         using var tx = db.BeginTransaction();
         var now = DateTimeOffset.UtcNow.ToString("O");
@@ -398,8 +452,9 @@ public static class KnownBusinessRules
                     is_locked=1,
                     updated_at=$now
                 WHERE organization_id=$org AND is_active=1
-                  AND (kkt_serial=$serial OR register_number=$rnm)
-                  AND binding_source<>'Manual';
+                  AND (kkt_serial=$serial OR (COALESCE(kkt_serial,'')='' AND register_number=$rnm))
+                  AND (location_id IS NOT $loc OR kkt_serial<>$serial OR register_number<>$rnm
+                       OR binding_source<>'Rule' OR is_locked<>1);
                 """;
             binding.Parameters.AddWithValue("$loc", point.Id.ToString());
             binding.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
@@ -421,7 +476,7 @@ public static class KnownBusinessRules
                     WHERE NOT EXISTS(
                         SELECT 1 FROM register_bindings
                         WHERE organization_id=$org AND is_active=1
-                          AND (kkt_serial=$serial OR register_number=$rnm)
+                          AND (kkt_serial=$serial OR (COALESCE(kkt_serial,'')='' AND register_number=$rnm))
                     );
                     """;
                 insert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
@@ -443,12 +498,13 @@ public static class KnownBusinessRules
                 UPDATE shift_closures
                 SET location_id=$loc
                 WHERE organization_id=$org
-                  AND kkt_serial=$serial
+                  AND (kkt_serial=$serial OR (COALESCE(kkt_serial,'')='' AND registration_number=$rnm))
                   AND (location_id IS NULL OR location_id<>$loc);
                 """;
             shifts.Parameters.AddWithValue("$loc", point.Id.ToString());
             shifts.Parameters.AddWithValue("$org", organization.Id.ToString());
             shifts.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
+            shifts.Parameters.AddWithValue("$rnm", GarantSamboRnm);
             moved += shifts.ExecuteNonQuery();
         }
 
@@ -460,12 +516,13 @@ public static class KnownBusinessRules
                 SET location_id=$loc
                 WHERE organization_id=$org
                   AND source_kind<>'Bank'
-                  AND kkt_serial=$serial
+                  AND (kkt_serial=$serial OR (COALESCE(kkt_serial,'')='' AND registration_number=$rnm))
                   AND (location_id IS NULL OR location_id<>$loc);
                 """;
             operations.Parameters.AddWithValue("$loc", point.Id.ToString());
             operations.Parameters.AddWithValue("$org", organization.Id.ToString());
             operations.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
+            operations.Parameters.AddWithValue("$rnm", GarantSamboRnm);
             moved += operations.ExecuteNonQuery();
         }
 
@@ -482,7 +539,8 @@ public static class KnownBusinessRules
                       SELECT 1 FROM shift_closures s
                       WHERE s.organization_id=operations.organization_id
                         AND s.source=operations.source
-                        AND s.kkt_serial=$serial
+                        AND (s.kkt_serial=$serial OR (COALESCE(s.kkt_serial,'')='' AND s.registration_number=$rnm))
+                        AND (COALESCE(operations.kkt_serial,'')='' OR operations.kkt_serial=$serial)
                         AND operations.external_id IN(s.external_id||':cash',s.external_id||':electronic')
                   )
                   AND (location_id IS NULL OR location_id<>$loc);
@@ -490,6 +548,7 @@ public static class KnownBusinessRules
             legacy.Parameters.AddWithValue("$loc", point.Id.ToString());
             legacy.Parameters.AddWithValue("$org", organization.Id.ToString());
             legacy.Parameters.AddWithValue("$serial", GarantSamboRegisterSerial);
+            legacy.Parameters.AddWithValue("$rnm", GarantSamboRnm);
             moved += legacy.ExecuteNonQuery();
         }
 
@@ -519,6 +578,7 @@ public static class KnownBusinessRules
         }
 
         tx.Commit();
+        return moved > 0;
     }
 
     private static void RepairGarantSredneuralskLegacyMayBankRows(Database database)
@@ -591,13 +651,16 @@ public static class KnownBusinessRules
                   AND source_kind='Bank'
                   AND organization_id=$org
                   AND location_id=$dvvs
-                  AND substr(occurred_at,1,19)=$time
+                  AND occurred_at >= $time AND occurred_at < $nextSecond
                   AND amount_kopecks=$amount;
                 """;
             command.Parameters.AddWithValue("$sred", sred.Id.ToString());
             command.Parameters.AddWithValue("$org", organization.Id.ToString());
             command.Parameters.AddWithValue("$dvvs", dvvs.Id.ToString());
             command.Parameters.AddWithValue("$time", row.Time);
+            command.Parameters.AddWithValue("$nextSecond", DateTime.ParseExact(row.Time, "yyyy-MM-dd'T'HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture).AddSeconds(1).ToString("yyyy-MM-dd'T'HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$amount", row.Kopecks);
             moved += command.ExecuteNonQuery();
         }

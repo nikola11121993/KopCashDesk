@@ -223,6 +223,7 @@ public sealed class SberAcquiringImporter
             var requestNumber = Get(values, "Номер запроса");
             var extraTransactionId = Get(values, "Доп. информация_2");
             var externalId = BuildExternalId(taxId, terminalId, merchantId, rrn, occurredAt, amount, requestNumber, extraTransactionId);
+            var confirmedTid = KnownBusinessRules.PointNameForTerminal(taxId, terminalId) is null ? null : terminalId;
             var inserted = _database.UpsertBankOperation(new CashOperation(
                 Source,
                 externalId,
@@ -233,7 +234,7 @@ public sealed class SberAcquiringImporter
                 kind,
                 PaymentKind.Electronic,
                 amount,
-                documentId));
+                documentId), confirmedTid);
 
             if (inserted) summary.OperationsAdded++;
             else summary.DuplicatesIgnored++;
@@ -274,6 +275,16 @@ public sealed class SberAcquiringImporter
         {
             var knownPoint = KnownBusinessRules.FindKnownPoint(organizationLocations, knownPointName);
             if (knownPoint is not null) return knownPoint;
+
+            if (knownPointName == KnownBusinessRules.GarantSamboPointName &&
+                !organizationLocations.Any(x => x.IsActive && NormalizeForMatch(x.Name) == NormalizeForMatch(knownPointName)))
+            {
+                var sambo = new Location(Guid.NewGuid(), organization.Id, knownPointName, KnownBusinessRules.GarantSamboAddress);
+                _database.Save(sambo);
+                _locations.Add(sambo);
+                summary.LocationsCreated++;
+                return sambo;
+            }
         }
 
         var terminalKey = TerminalKey(organization.Id, terminalId);
@@ -321,6 +332,20 @@ public sealed class SberAcquiringImporter
     private void SaveTerminal(Organization organization, Location location, string terminalId, string merchantId, string paymentMethod, SberImportSummary summary)
     {
         var key = TerminalKey(organization.Id, terminalId);
+        if (KnownBusinessRules.PointNameForTerminal(organization.TaxId, terminalId) == KnownBusinessRules.GarantSamboPointName)
+        {
+            if (_terminals.TryGetValue(key, out var saved) && saved.LocationId == location.Id &&
+                saved.BindingSource == BindingSource.Rule && saved.IsLocked && saved.MerchantId == merchantId)
+                return;
+
+            var terminal = new TerminalBinding(saved?.Id ?? Guid.NewGuid(), organization.Id, location.Id,
+                "Sber", terminalId, merchantId, paymentMethod, BindingSource.Rule, true);
+            KnownBusinessRules.SaveGarantSamboTerminal(_database, terminal);
+            _terminals[key] = terminal;
+            if (saved is null) summary.TerminalsCreated++;
+            return;
+        }
+
         if (_terminals.TryGetValue(key, out var current))
         {
             if (current.LocationId != location.Id || current.MerchantId != merchantId || current.PaymentMethod != paymentMethod)

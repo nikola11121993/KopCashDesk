@@ -49,6 +49,10 @@ public static class RegisterBindingService
         serial = Digits(serial); fn = Digits(fn); rnm = Digits(rnm);
         var locations = database.Locations().Where(l => l.OrganizationId == org).ToArray();
         var knownPointName = KnownBusinessRules.PointNameForRegisterSerial(serial);
+        if (serial.Length == 0 && rnm == KnownBusinessRules.GarantSamboRnm &&
+            database.Organizations().Any(x => x.Id == org && x.TaxId == KnownBusinessRules.GarantTaxId))
+            knownPointName = KnownBusinessRules.GarantSamboPointName;
+
         var knownRuleLocation = knownPointName is null ? null : KnownBusinessRules.FindKnownPoint(locations, knownPointName);
 
         var candidates = Read(database).Where(b => b.OrganizationId == org && IdentityRank(b, serial, fn, rnm) > 0).ToArray();

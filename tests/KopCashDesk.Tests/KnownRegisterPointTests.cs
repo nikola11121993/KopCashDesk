@@ -89,7 +89,7 @@ public sealed class KnownRegisterPointTests
                 "7381440901260801",
                 28,
                 null,
-                KnownBusinessRules.GarantSamboRegisterSerial,
+                "",
                 KnownBusinessRules.GarantSamboRnm,
                 "Балтым"));
 
@@ -110,7 +110,7 @@ public sealed class KnownRegisterPointTests
             var resolved = RegisterBindingService.Resolve(
                 db,
                 organization.Id,
-                KnownBusinessRules.GarantSamboRegisterSerial,
+                "",
                 "7381440901260801",
                 KnownBusinessRules.GarantSamboRnm,
                 "Любая подпись",
