@@ -105,7 +105,7 @@ public static class KnownBusinessRules
         if (applied > 0)
             database.RebuildCrossSourceShiftMatches();
 
-        return applied;
+        return applied + CopTerminalGroups.Repair(database);
     }
 
     private static void EnsureRegisterLocationRules(Database database)

@@ -269,6 +269,12 @@ public sealed class SberAcquiringImporter
     {
         var organizationLocations = _locations.Where(x => x.OrganizationId == organization.Id).ToArray();
 
+        var copPoint = CopTerminalGroups.Resolve(organization.TaxId, terminalId, organizationLocations,
+            _terminals.Values.Where(x => x.OrganizationId == organization.Id), out var copPointName);
+        if (copPoint is not null) return copPoint;
+        if (copPointName is not null)
+            pointName = copPointName;
+
         var knownPointName = KnownBusinessRules.PointNameForTerminal(organization.TaxId, terminalId);
         if (knownPointName is not null)
         {
@@ -280,7 +286,7 @@ public sealed class SberAcquiringImporter
         if (_terminals.TryGetValue(terminalKey, out var existingTerminal))
         {
             var bound = _locations.FirstOrDefault(x => x.Id == existingTerminal.LocationId);
-            if (bound is not null) return bound;
+            if (bound is not null && (copPointName is null || bound.Name == copPointName)) return bound;
         }
         var addressKey = NormalizeForMatch(address);
         var nameKey = NormalizeForMatch(pointName);
