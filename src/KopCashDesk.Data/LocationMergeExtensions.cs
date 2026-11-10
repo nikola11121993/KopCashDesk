@@ -6,6 +6,10 @@ namespace KopCashDesk.Data;
 public static class LocationMergeExtensions
 {
     public static bool MergeLocations(this Database database, Guid sourceLocationId, Guid targetLocationId, string reason = "")
+        => MergeLocations(database, sourceLocationId, targetLocationId, reason, null);
+
+    internal static bool MergeLocations(this Database database, Guid sourceLocationId, Guid targetLocationId, string reason,
+        Func<SqliteConnection, SqliteTransaction, bool>? canMerge)
     {
         if (sourceLocationId == targetLocationId) return false;
         database.EnsureManualCashPostings();
@@ -27,6 +31,8 @@ public static class LocationMergeExtensions
         if (!target.Value.IsActive) throw new InvalidOperationException("Нельзя объединять в неактивную точку.");
         if (source.Value.OrganizationId != target.Value.OrganizationId)
             throw new InvalidOperationException("Нельзя объединять точки разных организаций.");
+
+        if (canMerge is not null && !canMerge(db, transaction)) return false;
 
         EnsureManualCashCanMerge(db, transaction, sourceLocationId, targetLocationId);
         using (var check = db.CreateCommand())
